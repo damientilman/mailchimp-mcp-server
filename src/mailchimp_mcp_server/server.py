@@ -20,12 +20,14 @@ mcp = FastMCP("mailchimp-mcp-server")
 
 # --- Helper ---
 
-def mc_request(endpoint: str, params: Optional[dict] = None, method: str = "GET") -> dict:
+def mc_request(endpoint: str, params: Optional[dict] = None, body: Optional[dict] = None, method: str = "GET") -> dict:
     """Make an authenticated request to the Mailchimp API."""
     url = f"{MAILCHIMP_BASE_URL}/{endpoint.lstrip('/')}"
     auth = ("anystring", MAILCHIMP_API_KEY)
-    resp = requests.request(method, url, auth=auth, params=params, timeout=30)
+    resp = requests.request(method, url, auth=auth, params=params, json=body, timeout=30)
     resp.raise_for_status()
+    if resp.status_code == 204:
+        return {"status": "success"}
     return resp.json()
 
 
@@ -330,6 +332,333 @@ def list_segments(list_id: str, count: int = 20, offset: int = 0) -> str:
             "updated_at": s.get("updated_at"),
         })
     return json.dumps({"total_items": data.get("total_items"), "segments": segments}, indent=2)
+
+
+# --- Write Tools: Members ---
+
+@mcp.tool()
+def add_member(list_id: str, email_address: str, status: str = "subscribed", first_name: Optional[str] = None, last_name: Optional[str] = None, tags: Optional[str] = None) -> str:
+    """Add a new member to an audience.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        email_address: Email address of the new member.
+        status: Subscription status: 'subscribed', 'unsubscribed', 'cleaned', 'pending'.
+        first_name: First name (optional).
+        last_name: Last name (optional).
+        tags: Comma-separated list of tags to apply (optional).
+    """
+    body: dict = {"email_address": email_address, "status": status}
+    merge_fields = {}
+    if first_name:
+        merge_fields["FNAME"] = first_name
+    if last_name:
+        merge_fields["LNAME"] = last_name
+    if merge_fields:
+        body["merge_fields"] = merge_fields
+    if tags:
+        body["tags"] = [t.strip() for t in tags.split(",")]
+    data = mc_request(f"/lists/{list_id}/members", body=body, method="POST")
+    return json.dumps({
+        "id": data.get("id"),
+        "email_address": data.get("email_address"),
+        "status": data.get("status"),
+        "full_name": data.get("full_name"),
+    }, indent=2)
+
+
+@mcp.tool()
+def update_member(list_id: str, email_address: str, status: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None) -> str:
+    """Update an existing member in an audience.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        email_address: Email address of the member to update.
+        status: New status: 'subscribed', 'unsubscribed', 'cleaned', 'pending'.
+        first_name: New first name.
+        last_name: New last name.
+    """
+    import hashlib
+    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    body: dict = {}
+    if status:
+        body["status"] = status
+    merge_fields = {}
+    if first_name is not None:
+        merge_fields["FNAME"] = first_name
+    if last_name is not None:
+        merge_fields["LNAME"] = last_name
+    if merge_fields:
+        body["merge_fields"] = merge_fields
+    data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}", body=body, method="PATCH")
+    return json.dumps({
+        "id": data.get("id"),
+        "email_address": data.get("email_address"),
+        "status": data.get("status"),
+        "full_name": data.get("full_name"),
+    }, indent=2)
+
+
+@mcp.tool()
+def unsubscribe_member(list_id: str, email_address: str) -> str:
+    """Unsubscribe a member from an audience.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        email_address: Email address of the member to unsubscribe.
+    """
+    import hashlib
+    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}", body={"status": "unsubscribed"}, method="PATCH")
+    return json.dumps({
+        "email_address": data.get("email_address"),
+        "status": data.get("status"),
+    }, indent=2)
+
+
+@mcp.tool()
+def delete_member(list_id: str, email_address: str) -> str:
+    """Permanently delete a member from an audience. This cannot be undone.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        email_address: Email address of the member to permanently delete.
+    """
+    import hashlib
+    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    mc_request(f"/lists/{list_id}/members/{subscriber_hash}/actions/delete-permanent", method="POST")
+    return json.dumps({"status": "permanently_deleted", "email_address": email_address}, indent=2)
+
+
+@mcp.tool()
+def tag_member(list_id: str, email_address: str, tags_to_add: Optional[str] = None, tags_to_remove: Optional[str] = None) -> str:
+    """Add or remove tags from a member.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        email_address: Email address of the member.
+        tags_to_add: Comma-separated tags to add (optional).
+        tags_to_remove: Comma-separated tags to remove (optional).
+    """
+    import hashlib
+    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    tags = []
+    if tags_to_add:
+        for t in tags_to_add.split(","):
+            tags.append({"name": t.strip(), "status": "active"})
+    if tags_to_remove:
+        for t in tags_to_remove.split(","):
+            tags.append({"name": t.strip(), "status": "inactive"})
+    mc_request(f"/lists/{list_id}/members/{subscriber_hash}/tags", body={"tags": tags}, method="POST")
+    return json.dumps({"status": "updated", "email_address": email_address, "tags": tags}, indent=2)
+
+
+# --- Write Tools: Campaigns ---
+
+@mcp.tool()
+def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None, preview_text: Optional[str] = None, from_name: Optional[str] = None, reply_to: Optional[str] = None) -> str:
+    """Create a new campaign draft (regular email).
+
+    Args:
+        list_id: The audience/list ID to send to.
+        subject_line: The subject line of the email.
+        title: Internal title for the campaign (defaults to subject_line).
+        preview_text: Preview text shown in inbox.
+        from_name: The 'from' name on the email.
+        reply_to: The reply-to email address.
+    """
+    settings: dict = {"subject_line": subject_line, "title": title or subject_line}
+    if preview_text:
+        settings["preview_text"] = preview_text
+    if from_name:
+        settings["from_name"] = from_name
+    if reply_to:
+        settings["reply_to"] = reply_to
+    body = {
+        "type": "regular",
+        "recipients": {"list_id": list_id},
+        "settings": settings,
+    }
+    data = mc_request("/campaigns", body=body, method="POST")
+    return json.dumps({
+        "id": data.get("id"),
+        "status": data.get("status"),
+        "title": data.get("settings", {}).get("title"),
+        "subject_line": data.get("settings", {}).get("subject_line"),
+        "web_id": data.get("web_id"),
+    }, indent=2)
+
+
+@mcp.tool()
+def update_campaign(campaign_id: str, subject_line: Optional[str] = None, title: Optional[str] = None, preview_text: Optional[str] = None, from_name: Optional[str] = None, reply_to: Optional[str] = None) -> str:
+    """Update settings of an existing campaign draft.
+
+    Args:
+        campaign_id: The campaign ID to update.
+        subject_line: New subject line.
+        title: New internal title.
+        preview_text: New preview text.
+        from_name: New 'from' name.
+        reply_to: New reply-to email address.
+    """
+    settings: dict = {}
+    if subject_line:
+        settings["subject_line"] = subject_line
+    if title:
+        settings["title"] = title
+    if preview_text:
+        settings["preview_text"] = preview_text
+    if from_name:
+        settings["from_name"] = from_name
+    if reply_to:
+        settings["reply_to"] = reply_to
+    data = mc_request(f"/campaigns/{campaign_id}", body={"settings": settings}, method="PATCH")
+    return json.dumps({
+        "id": data.get("id"),
+        "status": data.get("status"),
+        "settings": data.get("settings"),
+    }, indent=2)
+
+
+@mcp.tool()
+def set_campaign_content(campaign_id: str, html: str) -> str:
+    """Set the HTML content of a campaign draft.
+
+    Args:
+        campaign_id: The campaign ID.
+        html: The full HTML content for the email body.
+    """
+    data = mc_request(f"/campaigns/{campaign_id}/content", body={"html": html}, method="PUT")
+    return json.dumps({"status": "content_set", "campaign_id": campaign_id}, indent=2)
+
+
+@mcp.tool()
+def schedule_campaign(campaign_id: str, schedule_time: str) -> str:
+    """Schedule a campaign for sending at a specific time. The campaign must have content set.
+
+    Args:
+        campaign_id: The campaign ID.
+        schedule_time: ISO 8601 date/time for sending (e.g. '2025-06-15T14:00:00Z').
+    """
+    mc_request(f"/campaigns/{campaign_id}/actions/schedule", body={"schedule_time": schedule_time}, method="POST")
+    return json.dumps({"status": "scheduled", "campaign_id": campaign_id, "schedule_time": schedule_time}, indent=2)
+
+
+@mcp.tool()
+def unschedule_campaign(campaign_id: str) -> str:
+    """Unschedule a previously scheduled campaign (returns it to draft).
+
+    Args:
+        campaign_id: The campaign ID to unschedule.
+    """
+    mc_request(f"/campaigns/{campaign_id}/actions/unschedule", method="POST")
+    return json.dumps({"status": "unscheduled", "campaign_id": campaign_id}, indent=2)
+
+
+@mcp.tool()
+def replicate_campaign(campaign_id: str) -> str:
+    """Duplicate an existing campaign.
+
+    Args:
+        campaign_id: The campaign ID to replicate.
+    """
+    data = mc_request(f"/campaigns/{campaign_id}/actions/replicate", method="POST")
+    return json.dumps({
+        "id": data.get("id"),
+        "status": data.get("status"),
+        "title": data.get("settings", {}).get("title"),
+        "web_id": data.get("web_id"),
+    }, indent=2)
+
+
+@mcp.tool()
+def delete_campaign(campaign_id: str) -> str:
+    """Delete a campaign. Only works on campaigns that haven't been sent.
+
+    Args:
+        campaign_id: The campaign ID to delete.
+    """
+    mc_request(f"/campaigns/{campaign_id}", method="DELETE")
+    return json.dumps({"status": "deleted", "campaign_id": campaign_id}, indent=2)
+
+
+# --- Write Tools: Tags & Segments ---
+
+@mcp.tool()
+def create_segment(list_id: str, name: str, static: bool = True) -> str:
+    """Create a new segment (or tag) in an audience.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        name: Name of the segment/tag.
+        static: If True, creates a static segment (tag). If False, creates a saved segment.
+    """
+    body: dict = {"name": name}
+    if static:
+        body["static_segment"] = []
+    data = mc_request(f"/lists/{list_id}/segments", body=body, method="POST")
+    return json.dumps({
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "member_count": data.get("member_count"),
+        "type": data.get("type"),
+    }, indent=2)
+
+
+@mcp.tool()
+def delete_segment(list_id: str, segment_id: str) -> str:
+    """Delete a segment/tag from an audience.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        segment_id: The segment/tag ID to delete.
+    """
+    mc_request(f"/lists/{list_id}/segments/{segment_id}", method="DELETE")
+    return json.dumps({"status": "deleted", "segment_id": segment_id}, indent=2)
+
+
+@mcp.tool()
+def add_members_to_segment(list_id: str, segment_id: str, emails: str) -> str:
+    """Add members to a static segment/tag.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        segment_id: The segment/tag ID.
+        emails: Comma-separated list of email addresses to add.
+    """
+    email_list = [e.strip() for e in emails.split(",")]
+    data = mc_request(
+        f"/lists/{list_id}/segments/{segment_id}",
+        body={"members_to_add": email_list},
+        method="POST",
+    )
+    return json.dumps({
+        "total_added": data.get("total_added"),
+        "total_removed": data.get("total_removed"),
+        "errors": data.get("errors", []),
+    }, indent=2)
+
+
+@mcp.tool()
+def remove_members_from_segment(list_id: str, segment_id: str, emails: str) -> str:
+    """Remove members from a static segment/tag.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        segment_id: The segment/tag ID.
+        emails: Comma-separated list of email addresses to remove.
+    """
+    email_list = [e.strip() for e in emails.split(",")]
+    data = mc_request(
+        f"/lists/{list_id}/segments/{segment_id}",
+        body={"members_to_remove": email_list},
+        method="POST",
+    )
+    return json.dumps({
+        "total_added": data.get("total_added"),
+        "total_removed": data.get("total_removed"),
+        "errors": data.get("errors", []),
+    }, indent=2)
 
 
 def main():

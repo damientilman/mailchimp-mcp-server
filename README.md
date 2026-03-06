@@ -4,17 +4,23 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io)
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that provides read-only access to the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/). Query your campaigns, audiences, reports, automations, and more directly from Claude.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/). Query your campaigns, audiences, reports, and more — or manage members, tags, and campaign drafts — directly from Claude.
 
 ## Features
 
+**Read**
 - **Campaigns** — List, search, and inspect campaign details
-- **Reports** — Get open rates, click rates, bounces, and per-link click data
+- **Reports** — Open rates, click rates, bounces, per-link click data
 - **Audiences** — Browse audiences, members, segments, and tags
 - **Growth history** — Monthly subscriber growth for any audience
 - **Automations** — List automated email workflows
 - **Templates** — Browse available email templates
 - **Search** — Find members by email or name across all audiences
+
+**Write**
+- **Members** — Add, update, unsubscribe, delete, and tag contacts
+- **Campaigns** — Create drafts, set content, schedule, unschedule, duplicate, delete
+- **Segments/Tags** — Create, delete, add/remove members
 
 ## Prerequisites
 
@@ -119,7 +125,7 @@ claude mcp add mailchimp \
 |---|---|
 | `get_account_info` | Get account name, email, and subscriber count |
 
-### Campaigns
+### Campaigns (read)
 
 | Tool | Description |
 |---|---|
@@ -128,7 +134,19 @@ claude mcp add mailchimp \
 | `get_campaign_report` | Get performance metrics (opens, clicks, bounces) |
 | `get_campaign_click_details` | Get per-link click data for a campaign |
 
-### Audiences
+### Campaigns (write)
+
+| Tool | Description |
+|---|---|
+| `create_campaign` | Create a new campaign draft |
+| `update_campaign` | Update subject line, title, preview text, etc. |
+| `set_campaign_content` | Set the HTML content of a campaign draft |
+| `schedule_campaign` | Schedule a campaign for a specific date/time |
+| `unschedule_campaign` | Unschedule a campaign (back to draft) |
+| `replicate_campaign` | Duplicate an existing campaign |
+| `delete_campaign` | Delete an unsent campaign |
+
+### Audiences (read)
 
 | Tool | Description |
 |---|---|
@@ -138,6 +156,25 @@ claude mcp add mailchimp \
 | `search_members` | Search members by email or name |
 | `get_audience_growth_history` | Monthly growth data (subscribes, unsubscribes) |
 | `list_segments` | List segments and tags for an audience |
+
+### Members (write)
+
+| Tool | Description |
+|---|---|
+| `add_member` | Add a new contact to an audience |
+| `update_member` | Update a contact's name or status |
+| `unsubscribe_member` | Unsubscribe a contact |
+| `delete_member` | Permanently delete a contact |
+| `tag_member` | Add or remove tags from a contact |
+
+### Segments & Tags (write)
+
+| Tool | Description |
+|---|---|
+| `create_segment` | Create a new segment or tag |
+| `delete_segment` | Delete a segment or tag |
+| `add_members_to_segment` | Add contacts to a segment/tag |
+| `remove_members_from_segment` | Remove contacts from a segment/tag |
 
 ### Automations & Templates
 
@@ -155,6 +192,9 @@ Once connected, you can ask Claude things like:
 - *"How many subscribers did I gain this year?"*
 - *"Which links got the most clicks in campaign X?"*
 - *"Search for subscriber john@example.com"*
+- *"Add tag 'VIP' to all members who opened my last campaign"*
+- *"Create a draft campaign for my main audience with subject 'March Update'"*
+- *"Unsubscribe user@example.com from my list"*
 
 ## Author
 
