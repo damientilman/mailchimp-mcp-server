@@ -70,13 +70,19 @@ pip install -e .
 
 ## Configuration
 
-The server requires one environment variable:
-
-| Variable | Description |
-|---|---|
-| `MAILCHIMP_API_KEY` | Your Mailchimp API key (format: `<key>-<dc>`, e.g. `abc123-us8`) |
+| Variable | Required | Description |
+|---|---|---|
+| `MAILCHIMP_API_KEY` | Yes | Your Mailchimp API key (format: `<key>-<dc>`, e.g. `abc123-us8`) |
+| `MAILCHIMP_READ_ONLY` | No | Set to `true` to disable all write operations (default: `false`) |
+| `MAILCHIMP_DRY_RUN` | No | Set to `true` to preview write operations without executing them (default: `false`) |
 
 The datacenter (`us8`, `us21`, etc.) is automatically extracted from the key.
+
+### Safety modes
+
+**Read-only mode** — When `MAILCHIMP_READ_ONLY=true`, all write tools (create, update, delete, schedule, etc.) are blocked and return an error. Read tools work normally. This is the recommended default for shared or exploratory setups where you only need reporting and analytics.
+
+**Dry-run mode** — When `MAILCHIMP_DRY_RUN=true`, write tools return a preview of the action they *would* perform (tool name, target resource, parameters) without making any API call. Useful for testing prompts before going live.
 
 ### Claude Desktop
 
@@ -117,12 +123,41 @@ Add this to your `claude_desktop_config.json`:
 ```
 </details>
 
+<details>
+<summary>Read-only mode (recommended for exploration)</summary>
+
+```json
+{
+  "mcpServers": {
+    "mailchimp": {
+      "command": "uvx",
+      "args": ["mailchimp-mcp-server"],
+      "env": {
+        "MAILCHIMP_API_KEY": "your-api-key-here",
+        "MAILCHIMP_READ_ONLY": "true"
+      }
+    }
+  }
+}
+```
+</details>
+
 ### Claude Code
 
 ```bash
 claude mcp add mailchimp \
   -s user \
   -e MAILCHIMP_API_KEY=your-api-key-here \
+  -- uvx mailchimp-mcp-server
+```
+
+For read-only mode:
+
+```bash
+claude mcp add mailchimp \
+  -s user \
+  -e MAILCHIMP_API_KEY=your-api-key-here \
+  -e MAILCHIMP_READ_ONLY=true \
   -- uvx mailchimp-mcp-server
 ```
 
