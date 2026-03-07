@@ -25,10 +25,24 @@ def mc_request(endpoint: str, params: Optional[dict] = None, body: Optional[dict
     """Make an authenticated request to the Mailchimp API."""
     url = f"{MAILCHIMP_BASE_URL}/{endpoint.lstrip('/')}"
     auth = ("anystring", MAILCHIMP_API_KEY)
-    resp = requests.request(method, url, auth=auth, params=params, json=body, timeout=30)
-    resp.raise_for_status()
+    try:
+        resp = requests.request(method, url, auth=auth, params=params, json=body, timeout=30)
+    except requests.exceptions.Timeout:
+        return {"error": "Request timed out after 30 seconds", "endpoint": endpoint}
+    except requests.exceptions.ConnectionError:
+        return {"error": "Could not connect to Mailchimp API", "endpoint": endpoint}
     if resp.status_code == 204:
         return {"status": "success"}
+    if not resp.ok:
+        try:
+            err = resp.json()
+            return {
+                "error": err.get("title", "API error"),
+                "detail": err.get("detail", ""),
+                "status": resp.status_code,
+            }
+        except Exception:
+            return {"error": f"HTTP {resp.status_code}", "detail": resp.text[:500]}
     return resp.json()
 
 
