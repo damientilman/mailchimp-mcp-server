@@ -7,13 +7,7 @@ from mcp.server.fastmcp import FastMCP
 
 # --- Config ---
 MAILCHIMP_API_KEY = os.environ.get("MAILCHIMP_API_KEY", "")
-if not MAILCHIMP_API_KEY:
-    raise ValueError(
-        "MAILCHIMP_API_KEY environment variable is required. "
-        "Get your API key at https://mailchimp.com/help/about-api-keys/"
-    )
-
-MAILCHIMP_DC = MAILCHIMP_API_KEY.split("-")[-1]
+MAILCHIMP_DC = MAILCHIMP_API_KEY.split("-")[-1] if "-" in MAILCHIMP_API_KEY else "us1"
 MAILCHIMP_BASE_URL = f"https://{MAILCHIMP_DC}.api.mailchimp.com/3.0"
 
 mcp = FastMCP("mailchimp-mcp-server")
@@ -23,6 +17,8 @@ mcp = FastMCP("mailchimp-mcp-server")
 
 def mc_request(endpoint: str, params: Optional[dict] = None, body: Optional[dict] = None, method: str = "GET") -> dict:
     """Make an authenticated request to the Mailchimp API."""
+    if not MAILCHIMP_API_KEY:
+        return {"error": "MAILCHIMP_API_KEY environment variable is not set. Get your API key at https://mailchimp.com/help/about-api-keys/"}
     url = f"{MAILCHIMP_BASE_URL}/{endpoint.lstrip('/')}"
     auth = ("anystring", MAILCHIMP_API_KEY)
     try:
