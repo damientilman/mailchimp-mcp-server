@@ -6,6 +6,10 @@
 
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/). 53 tools to query and manage your Mailchimp account directly from Claude.
 
+<a href="https://glama.ai/mcp/servers/@damientilman/mailchimp-mcp">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@damientilman/mailchimp-mcp/badge" alt="Mailchimp MCP server" />
+</a>
+
 ## Features
 
 **Read**
