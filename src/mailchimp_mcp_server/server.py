@@ -7,22 +7,32 @@ from mcp.server.fastmcp import FastMCP
 
 # --- Config ---
 MAILCHIMP_API_KEY = os.environ.get("MAILCHIMP_API_KEY", "")
-if not MAILCHIMP_API_KEY:
-    raise ValueError(
-        "MAILCHIMP_API_KEY environment variable is required. "
-        "Get your API key at https://mailchimp.com/help/about-api-keys/"
-    )
-
-MAILCHIMP_DC = MAILCHIMP_API_KEY.split("-")[-1]
+MAILCHIMP_DC = MAILCHIMP_API_KEY.split("-")[-1] if "-" in MAILCHIMP_API_KEY else "us1"
 MAILCHIMP_BASE_URL = f"https://{MAILCHIMP_DC}.api.mailchimp.com/3.0"
+READ_ONLY = os.environ.get("MAILCHIMP_READ_ONLY", "").lower() in ("1", "true", "yes")
+DRY_RUN = os.environ.get("MAILCHIMP_DRY_RUN", "").lower() in ("1", "true", "yes")
 
 mcp = FastMCP("mailchimp-mcp-server")
 
 
-# --- Helper ---
+# --- Helpers ---
+
+def _guard_write(**context) -> Optional[str]:
+    """Block writes in read-only mode, preview them in dry-run mode.
+
+    Returns a JSON string to short-circuit the caller, or None to proceed.
+    """
+    if READ_ONLY:
+        return json.dumps({"error": "Server is in read-only mode. Set MAILCHIMP_READ_ONLY=false to allow writes."}, indent=2)
+    if DRY_RUN:
+        return json.dumps({"dry_run": True, **context}, indent=2)
+    return None
+
 
 def mc_request(endpoint: str, params: Optional[dict] = None, body: Optional[dict] = None, method: str = "GET") -> dict:
     """Make an authenticated request to the Mailchimp API."""
+    if not MAILCHIMP_API_KEY:
+        return {"error": "MAILCHIMP_API_KEY environment variable is not set. Get your API key at https://mailchimp.com/help/about-api-keys/"}
     url = f"{MAILCHIMP_BASE_URL}/{endpoint.lstrip('/')}"
     auth = ("anystring", MAILCHIMP_API_KEY)
     try:
@@ -363,6 +373,8 @@ def add_member(list_id: str, email_address: str, status: str = "subscribed", fir
         last_name: Last name (optional).
         tags: Comma-separated list of tags to apply (optional).
     """
+    if (guard := _guard_write(action="add member", email_address=email_address, list_id=list_id, status=status)):
+        return guard
     body: dict = {"email_address": email_address, "status": status}
     merge_fields = {}
     if first_name:
@@ -393,6 +405,8 @@ def update_member(list_id: str, email_address: str, status: Optional[str] = None
         first_name: New first name.
         last_name: New last name.
     """
+    if (guard := _guard_write(action="update member", email_address=email_address, list_id=list_id)):
+        return guard
     subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
     body: dict = {}
     if status:
@@ -415,12 +429,14 @@ def update_member(list_id: str, email_address: str, status: Optional[str] = None
 
 @mcp.tool()
 def unsubscribe_member(list_id: str, email_address: str) -> str:
-    """Unsubscribe a member from an audience.
+    """Unsubscribe a member from an audience. The member will stop receiving campaigns.
 
     Args:
         list_id: The Mailchimp audience/list ID.
         email_address: Email address of the member to unsubscribe.
     """
+    if (guard := _guard_write(action="unsubscribe member", email_address=email_address, list_id=list_id)):
+        return guard
     subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}", body={"status": "unsubscribed"}, method="PATCH")
     return json.dumps({
@@ -431,12 +447,15 @@ def unsubscribe_member(list_id: str, email_address: str) -> str:
 
 @mcp.tool()
 def delete_member(list_id: str, email_address: str) -> str:
-    """Permanently delete a member from an audience. This cannot be undone.
+    """Permanently delete a member from an audience. This action is irreversible — the member's
+    history, activity, and all associated data will be lost.
 
     Args:
         list_id: The Mailchimp audience/list ID.
         email_address: Email address of the member to permanently delete.
     """
+    if (guard := _guard_write(action="permanently delete member", email_address=email_address, list_id=list_id)):
+        return guard
     subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
     mc_request(f"/lists/{list_id}/members/{subscriber_hash}/actions/delete-permanent", method="POST")
     return json.dumps({"status": "permanently_deleted", "email_address": email_address}, indent=2)
@@ -452,6 +471,8 @@ def tag_member(list_id: str, email_address: str, tags_to_add: Optional[str] = No
         tags_to_add: Comma-separated tags to add (optional).
         tags_to_remove: Comma-separated tags to remove (optional).
     """
+    if (guard := _guard_write(action="update member tags", email_address=email_address, list_id=list_id)):
+        return guard
     subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
     tags = []
     if tags_to_add:
@@ -478,6 +499,8 @@ def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None
         from_name: The 'from' name on the email.
         reply_to: The reply-to email address.
     """
+    if (guard := _guard_write(action="create campaign draft", list_id=list_id, subject_line=subject_line)):
+        return guard
     settings: dict = {"subject_line": subject_line, "title": title or subject_line}
     if preview_text:
         settings["preview_text"] = preview_text
@@ -512,6 +535,8 @@ def update_campaign(campaign_id: str, subject_line: Optional[str] = None, title:
         from_name: New 'from' name.
         reply_to: New reply-to email address.
     """
+    if (guard := _guard_write(action="update campaign", campaign_id=campaign_id)):
+        return guard
     settings: dict = {}
     if subject_line:
         settings["subject_line"] = subject_line
@@ -539,18 +564,23 @@ def set_campaign_content(campaign_id: str, html: str) -> str:
         campaign_id: The campaign ID.
         html: The full HTML content for the email body.
     """
+    if (guard := _guard_write(action="set campaign content", campaign_id=campaign_id)):
+        return guard
     data = mc_request(f"/campaigns/{campaign_id}/content", body={"html": html}, method="PUT")
     return json.dumps({"status": "content_set", "campaign_id": campaign_id}, indent=2)
 
 
 @mcp.tool()
 def schedule_campaign(campaign_id: str, schedule_time: str) -> str:
-    """Schedule a campaign for sending at a specific time. The campaign must have content set.
+    """Schedule a campaign for sending at a specific time. Once the scheduled time arrives,
+    the campaign will be sent to all recipients in the audience. The campaign must have content set.
 
     Args:
         campaign_id: The campaign ID.
         schedule_time: ISO 8601 date/time for sending (e.g. '2025-06-15T14:00:00Z').
     """
+    if (guard := _guard_write(action="schedule campaign", campaign_id=campaign_id, schedule_time=schedule_time)):
+        return guard
     mc_request(f"/campaigns/{campaign_id}/actions/schedule", body={"schedule_time": schedule_time}, method="POST")
     return json.dumps({"status": "scheduled", "campaign_id": campaign_id, "schedule_time": schedule_time}, indent=2)
 
@@ -562,6 +592,8 @@ def unschedule_campaign(campaign_id: str) -> str:
     Args:
         campaign_id: The campaign ID to unschedule.
     """
+    if (guard := _guard_write(action="unschedule campaign", campaign_id=campaign_id)):
+        return guard
     mc_request(f"/campaigns/{campaign_id}/actions/unschedule", method="POST")
     return json.dumps({"status": "unscheduled", "campaign_id": campaign_id}, indent=2)
 
@@ -573,6 +605,8 @@ def replicate_campaign(campaign_id: str) -> str:
     Args:
         campaign_id: The campaign ID to replicate.
     """
+    if (guard := _guard_write(action="replicate campaign", campaign_id=campaign_id)):
+        return guard
     data = mc_request(f"/campaigns/{campaign_id}/actions/replicate", method="POST")
     return json.dumps({
         "id": data.get("id"),
@@ -584,11 +618,13 @@ def replicate_campaign(campaign_id: str) -> str:
 
 @mcp.tool()
 def delete_campaign(campaign_id: str) -> str:
-    """Delete a campaign. Only works on campaigns that haven't been sent.
+    """Delete a campaign. This is irreversible. Only works on campaigns that haven't been sent.
 
     Args:
         campaign_id: The campaign ID to delete.
     """
+    if (guard := _guard_write(action="delete campaign", campaign_id=campaign_id)):
+        return guard
     mc_request(f"/campaigns/{campaign_id}", method="DELETE")
     return json.dumps({"status": "deleted", "campaign_id": campaign_id}, indent=2)
 
@@ -604,6 +640,8 @@ def create_segment(list_id: str, name: str, static: bool = True) -> str:
         name: Name of the segment/tag.
         static: If True, creates a static segment (tag). If False, creates a saved segment.
     """
+    if (guard := _guard_write(action="create segment", list_id=list_id, name=name)):
+        return guard
     body: dict = {"name": name}
     if static:
         body["static_segment"] = []
@@ -618,12 +656,15 @@ def create_segment(list_id: str, name: str, static: bool = True) -> str:
 
 @mcp.tool()
 def delete_segment(list_id: str, segment_id: str) -> str:
-    """Delete a segment/tag from an audience.
+    """Delete a segment/tag from an audience. This is irreversible — the segment and its
+    association with members will be removed.
 
     Args:
         list_id: The Mailchimp audience/list ID.
         segment_id: The segment/tag ID to delete.
     """
+    if (guard := _guard_write(action="delete segment", list_id=list_id, segment_id=segment_id)):
+        return guard
     mc_request(f"/lists/{list_id}/segments/{segment_id}", method="DELETE")
     return json.dumps({"status": "deleted", "segment_id": segment_id}, indent=2)
 
@@ -637,6 +678,8 @@ def add_members_to_segment(list_id: str, segment_id: str, emails: str) -> str:
         segment_id: The segment/tag ID.
         emails: Comma-separated list of email addresses to add.
     """
+    if (guard := _guard_write(action="add members to segment", list_id=list_id, segment_id=segment_id)):
+        return guard
     email_list = [e.strip() for e in emails.split(",")]
     data = mc_request(
         f"/lists/{list_id}/segments/{segment_id}",
@@ -659,6 +702,8 @@ def remove_members_from_segment(list_id: str, segment_id: str, emails: str) -> s
         segment_id: The segment/tag ID.
         emails: Comma-separated list of email addresses to remove.
     """
+    if (guard := _guard_write(action="remove members from segment", list_id=list_id, segment_id=segment_id)):
+        return guard
     email_list = [e.strip() for e in emails.split(",")]
     data = mc_request(
         f"/lists/{list_id}/segments/{segment_id}",
@@ -919,22 +964,28 @@ def get_automation_email_queue(automation_id: str, email_id: str) -> str:
 
 @mcp.tool()
 def pause_automation(automation_id: str) -> str:
-    """Pause all emails in an automation workflow.
+    """Pause all emails in an automation workflow. Subscribers currently in the queue will
+    not receive further emails until the workflow is resumed.
 
     Args:
         automation_id: The automation workflow ID.
     """
+    if (guard := _guard_write(action="pause automation", automation_id=automation_id)):
+        return guard
     mc_request(f"/automations/{automation_id}/actions/pause-all-emails", method="POST")
     return json.dumps({"status": "paused", "automation_id": automation_id}, indent=2)
 
 
 @mcp.tool()
 def start_automation(automation_id: str) -> str:
-    """Start (or resume) all emails in an automation workflow.
+    """Start (or resume) all emails in an automation workflow. Queued subscribers will begin
+    receiving emails again.
 
     Args:
         automation_id: The automation workflow ID.
     """
+    if (guard := _guard_write(action="start automation", automation_id=automation_id)):
+        return guard
     mc_request(f"/automations/{automation_id}/actions/start-all-emails", method="POST")
     return json.dumps({"status": "started", "automation_id": automation_id}, indent=2)
 
@@ -1108,11 +1159,14 @@ def list_campaign_folders(count: int = 50, offset: int = 0) -> str:
 @mcp.tool()
 def create_batch(operations: str) -> str:
     """Run multiple API operations in a single batch request. Useful for bulk updates.
+    Each operation runs against the Mailchimp API — destructive operations included.
 
     Args:
         operations: JSON string of operations array. Each operation needs: method, path, and optionally body.
             Example: [{"method":"POST","path":"/lists/abc123/members/hash/tags","body":"{\"tags\":[{\"name\":\"VIP\",\"status\":\"active\"}]}"}]
     """
+    if (guard := _guard_write(action="run batch operations")):
+        return guard
     ops = json.loads(operations)
     data = mc_request("/batches", body={"operations": ops}, method="POST")
     return json.dumps({
