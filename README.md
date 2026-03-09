@@ -6,7 +6,7 @@
 
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/). 53 tools to query and manage your Mailchimp account directly from Claude.
 
-Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api/) via [`requests`](https://pypi.org/project/requests/). Not based on the official [mailchimp-marketing-python](https://github.com/mailchimp/mailchimp-marketing-python) client — I hit too many issues with it so I went with raw HTTP calls instead.
+Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api/) via [`requests`](https://pypi.org/project/requests/). Not based on the official [mailchimp-marketing-python](https://github.com/mailchimp/mailchimp-marketing-python) client. I hit too many issues with it so I went with raw HTTP calls instead.
 
 <a href="https://glama.ai/mcp/servers/@damientilman/mailchimp-mcp">
   <img width="380" height="200" src="https://glama.ai/mcp/servers/@damientilman/mailchimp-mcp/badge" alt="Mailchimp MCP server" />
