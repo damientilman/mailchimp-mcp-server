@@ -33,6 +33,10 @@ Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api
 - **Automations** - Pause and start automation workflows
 - **Batch** - Run bulk API operations in a single request
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/damientilman-mailchimp-mcp-server).
+
 ## Prerequisites
 
 - Python 3.10+
