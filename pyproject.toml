@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mailchimp-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "MCP server for the Mailchimp Marketing API — access campaigns, audiences, reports, and more from Claude."
 readme = "README.md"
 license = "MIT"
