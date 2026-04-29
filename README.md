@@ -4,7 +4,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io)
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/). 53 tools to query and manage your Mailchimp account directly from Claude.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/). 74 tools to query and manage your Mailchimp account directly from Claude.
 
 Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api/) via [`requests`](https://pypi.org/project/requests/). Not based on the official [mailchimp-marketing-python](https://github.com/mailchimp/mailchimp-marketing-python) client. I hit too many issues with it so I went with raw HTTP calls instead.
 
@@ -19,6 +19,10 @@ Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api
 - **Reports** - Open/click rates, bounces, per-link clicks, domain performance, unsubscribe details
 - **Email activity** - Per-recipient open/click tracking, member activity history
 - **Audiences** - Browse audiences, members, segments, tags, and growth history
+- **Merge fields** - List custom fields for an audience
+- **Interest categories & groups** - Browse interest categories and options
+- **Webhooks** - List configured webhooks
+- **Segments** - Get segment details, conditions, and member lists
 - **Automations** - List workflows, inspect emails in a workflow, view queues
 - **Templates** - Browse available email templates
 - **Landing pages** - List and inspect landing pages
@@ -28,8 +32,12 @@ Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api
 
 **Write**
 - **Members** - Add, update, unsubscribe, delete, and tag contacts
-- **Campaigns** - Create drafts, set HTML content, schedule, unschedule, duplicate, delete
-- **Segments/Tags** - Create, delete, add/remove members
+- **Audiences** - Batch subscribe members, update audience settings
+- **Campaigns** - Create drafts, set HTML content, schedule, unschedule, duplicate, delete, send, send test, cancel
+- **Segments/Tags** - Create, update, delete, add/remove members, dynamic conditions
+- **Merge fields** - Create, update, delete custom fields
+- **Interest categories** - Create and delete categories and interests
+- **Webhooks** - Create and delete webhooks
 - **Automations** - Pause and start automation workflows
 - **Batch** - Run bulk API operations in a single request
 
@@ -199,13 +207,16 @@ claude mcp add mailchimp \
 
 | Tool | Description |
 |---|---|
-| `create_campaign` | Create a new campaign draft |
-| `update_campaign` | Update subject line, title, preview text, etc. |
+| `create_campaign` | Create a new campaign draft (with optional segment targeting) |
+| `update_campaign` | Update settings or segment targeting of a campaign |
 | `set_campaign_content` | Set the HTML content of a campaign draft |
 | `schedule_campaign` | Schedule a campaign for a specific date/time |
 | `unschedule_campaign` | Unschedule a campaign (back to draft) |
 | `replicate_campaign` | Duplicate an existing campaign |
 | `delete_campaign` | Delete an unsent campaign |
+| `send_campaign` | Send a campaign immediately |
+| `send_test_email` | Send a test email for a campaign |
+| `cancel_send` | Cancel a campaign that is currently sending |
 
 ### Audiences (read)
 
@@ -216,7 +227,6 @@ claude mcp add mailchimp \
 | `list_audience_members` | List members with optional status filter |
 | `search_members` | Search members by email or name |
 | `get_audience_growth_history` | Monthly growth data (subscribes, unsubscribes) |
-| `list_segments` | List segments and tags for an audience |
 
 ### Members (read)
 
@@ -236,14 +246,53 @@ claude mcp add mailchimp \
 | `delete_member` | Permanently delete a contact |
 | `tag_member` | Add or remove tags from a contact |
 
-### Segments & Tags (write)
+### Audiences (write)
 
 | Tool | Description |
 |---|---|
-| `create_segment` | Create a new segment or tag |
+| `batch_subscribe` | Batch add/update multiple members in an audience |
+| `update_audience` | Update audience settings (name, defaults, permission reminder) |
+
+### Segments & Tags
+
+| Tool | Description |
+|---|---|
+| `list_segments` | List segments and tags for an audience |
+| `get_segment` | Get segment details including conditions |
+| `list_segment_members` | List members in a segment |
+| `create_segment` | Create a new segment or tag (static or dynamic with conditions) |
+| `update_segment` | Update a segment's name or conditions |
 | `delete_segment` | Delete a segment or tag |
 | `add_members_to_segment` | Add contacts to a segment/tag |
 | `remove_members_from_segment` | Remove contacts from a segment/tag |
+
+### Merge Fields
+
+| Tool | Description |
+|---|---|
+| `list_merge_fields` | List custom fields for an audience |
+| `create_merge_field` | Create a new custom field (text, number, dropdown, etc.) |
+| `update_merge_field` | Update a custom field |
+| `delete_merge_field` | Delete a custom field |
+
+### Interest Categories & Groups
+
+| Tool | Description |
+|---|---|
+| `list_interest_categories` | List interest categories for an audience |
+| `create_interest_category` | Create a new interest category |
+| `list_interests` | List interests within a category |
+| `create_interest` | Create a new interest option |
+| `delete_interest_category` | Delete an interest category |
+| `delete_interest` | Delete an interest option |
+
+### Webhooks
+
+| Tool | Description |
+|---|---|
+| `list_webhooks` | List webhooks for an audience |
+| `create_webhook` | Create a new webhook |
+| `delete_webhook` | Delete a webhook |
 
 ### Automations
 
@@ -296,6 +345,13 @@ Once connected, you can ask Claude things like:
 - *"Search for subscriber john@example.com"*
 - *"Add tag 'VIP' to all members who opened my last campaign"*
 - *"Create a draft campaign for my main audience with subject 'March Update'"*
+- *"Create a campaign targeting only my VIP segment"*
+- *"Send a test email of my draft campaign to test@example.com"*
+- *"List all merge fields for my main audience"*
+- *"Create a dropdown merge field called 'Industry' with options Tech, Finance, Healthcare"*
+- *"Create a dynamic segment of members where FNAME is John"*
+- *"Batch subscribe 50 members from this CSV data"*
+- *"Set up a webhook to notify my app when new subscribers join"*
 - *"Unsubscribe user@example.com from my list"*
 - *"Show me the domain performance breakdown for my last campaign"*
 - *"Pause my welcome automation"*

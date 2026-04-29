@@ -485,11 +485,75 @@ def tag_member(list_id: str, email_address: str, tags_to_add: Optional[str] = No
     return json.dumps({"status": "updated", "email_address": email_address, "tags": tags}, indent=2)
 
 
+# --- Write Tools: Audiences ---
+
+@mcp.tool()
+def batch_subscribe(list_id: str, members_json: str, update_existing: bool = True) -> str:
+    """Batch add or update multiple members in an audience in a single request.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        members_json: JSON string of members array. Each member needs at minimum: email_address, status.
+            Example: '[{"email_address":"a@b.com","status":"subscribed","merge_fields":{"FNAME":"Alice"}}]'
+        update_existing: If True, update members that already exist (default True).
+    """
+    if (guard := _guard_write(action="batch subscribe members", list_id=list_id)):
+        return guard
+    members = json.loads(members_json)
+    body = {"members": members, "update_existing": update_existing}
+    data = mc_request(f"/lists/{list_id}", body=body, method="POST")
+    return json.dumps({
+        "new_members": len(data.get("new_members", [])),
+        "updated_members": len(data.get("updated_members", [])),
+        "errors": data.get("errors", []),
+        "total_created": data.get("total_created"),
+        "total_updated": data.get("total_updated"),
+        "error_count": data.get("error_count"),
+    }, indent=2)
+
+
+@mcp.tool()
+def update_audience(list_id: str, name: Optional[str] = None, from_name: Optional[str] = None, from_email: Optional[str] = None, subject: Optional[str] = None, permission_reminder: Optional[str] = None) -> str:
+    """Update audience settings (name, default from/subject, permission reminder).
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        name: New audience name.
+        from_name: Default 'from' name for campaigns.
+        from_email: Default 'from' email for campaigns.
+        subject: Default email subject.
+        permission_reminder: Permission reminder text shown to subscribers.
+    """
+    if (guard := _guard_write(action="update audience", list_id=list_id)):
+        return guard
+    body: dict = {}
+    if name:
+        body["name"] = name
+    if permission_reminder:
+        body["permission_reminder"] = permission_reminder
+    campaign_defaults = {}
+    if from_name:
+        campaign_defaults["from_name"] = from_name
+    if from_email:
+        campaign_defaults["from_email"] = from_email
+    if subject:
+        campaign_defaults["subject"] = subject
+    if campaign_defaults:
+        body["campaign_defaults"] = campaign_defaults
+    data = mc_request(f"/lists/{list_id}", body=body, method="PATCH")
+    return json.dumps({
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "permission_reminder": data.get("permission_reminder"),
+        "campaign_defaults": data.get("campaign_defaults"),
+    }, indent=2)
+
+
 # --- Write Tools: Campaigns ---
 
 @mcp.tool()
-def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None, preview_text: Optional[str] = None, from_name: Optional[str] = None, reply_to: Optional[str] = None) -> str:
-    """Create a new campaign draft (regular email).
+def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None, preview_text: Optional[str] = None, from_name: Optional[str] = None, reply_to: Optional[str] = None, segment_id: Optional[str] = None) -> str:
+    """Create a new campaign draft (regular email), optionally targeting a specific segment.
 
     Args:
         list_id: The audience/list ID to send to.
@@ -498,6 +562,7 @@ def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None
         preview_text: Preview text shown in inbox.
         from_name: The 'from' name on the email.
         reply_to: The reply-to email address.
+        segment_id: Optional saved segment ID to target. Only sends to members in this segment.
     """
     if (guard := _guard_write(action="create campaign draft", list_id=list_id, subject_line=subject_line)):
         return guard
@@ -508,9 +573,12 @@ def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None
         settings["from_name"] = from_name
     if reply_to:
         settings["reply_to"] = reply_to
+    recipients: dict = {"list_id": list_id}
+    if segment_id:
+        recipients["segment_opts"] = {"saved_segment_id": int(segment_id)}
     body = {
         "type": "regular",
-        "recipients": {"list_id": list_id},
+        "recipients": recipients,
         "settings": settings,
     }
     data = mc_request("/campaigns", body=body, method="POST")
@@ -524,8 +592,8 @@ def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None
 
 
 @mcp.tool()
-def update_campaign(campaign_id: str, subject_line: Optional[str] = None, title: Optional[str] = None, preview_text: Optional[str] = None, from_name: Optional[str] = None, reply_to: Optional[str] = None) -> str:
-    """Update settings of an existing campaign draft.
+def update_campaign(campaign_id: str, subject_line: Optional[str] = None, title: Optional[str] = None, preview_text: Optional[str] = None, from_name: Optional[str] = None, reply_to: Optional[str] = None, list_id: Optional[str] = None, segment_id: Optional[str] = None) -> str:
+    """Update settings or segment targeting of an existing campaign draft.
 
     Args:
         campaign_id: The campaign ID to update.
@@ -534,6 +602,8 @@ def update_campaign(campaign_id: str, subject_line: Optional[str] = None, title:
         preview_text: New preview text.
         from_name: New 'from' name.
         reply_to: New reply-to email address.
+        list_id: Audience/list ID (required if changing segment targeting).
+        segment_id: Saved segment ID to target within the audience.
     """
     if (guard := _guard_write(action="update campaign", campaign_id=campaign_id)):
         return guard
@@ -548,11 +618,22 @@ def update_campaign(campaign_id: str, subject_line: Optional[str] = None, title:
         settings["from_name"] = from_name
     if reply_to:
         settings["reply_to"] = reply_to
-    data = mc_request(f"/campaigns/{campaign_id}", body={"settings": settings}, method="PATCH")
+    body: dict = {}
+    if settings:
+        body["settings"] = settings
+    if list_id or segment_id:
+        recipients: dict = {}
+        if list_id:
+            recipients["list_id"] = list_id
+        if segment_id:
+            recipients["segment_opts"] = {"saved_segment_id": int(segment_id)}
+        body["recipients"] = recipients
+    data = mc_request(f"/campaigns/{campaign_id}", body=body, method="PATCH")
     return json.dumps({
         "id": data.get("id"),
         "status": data.get("status"),
         "settings": data.get("settings"),
+        "recipients": data.get("recipients"),
     }, indent=2)
 
 
@@ -629,21 +710,71 @@ def delete_campaign(campaign_id: str) -> str:
     return json.dumps({"status": "deleted", "campaign_id": campaign_id}, indent=2)
 
 
+@mcp.tool()
+def send_campaign(campaign_id: str) -> str:
+    """Send a campaign immediately. The campaign must have content set and be in 'save' status.
+    This action is irreversible -- the email will be delivered to all recipients.
+
+    Args:
+        campaign_id: The campaign ID to send.
+    """
+    if (guard := _guard_write(action="send campaign", campaign_id=campaign_id)):
+        return guard
+    mc_request(f"/campaigns/{campaign_id}/actions/send", method="POST")
+    return json.dumps({"status": "sent", "campaign_id": campaign_id}, indent=2)
+
+
+@mcp.tool()
+def send_test_email(campaign_id: str, test_emails: str, send_type: str = "html") -> str:
+    """Send a test email for a campaign to one or more email addresses.
+
+    Args:
+        campaign_id: The campaign ID.
+        test_emails: Comma-separated list of email addresses to send the test to.
+        send_type: Type of test email: 'html' or 'plaintext' (default 'html').
+    """
+    if (guard := _guard_write(action="send test email", campaign_id=campaign_id)):
+        return guard
+    email_list = [e.strip() for e in test_emails.split(",")]
+    body = {"test_emails": email_list, "send_type": send_type}
+    mc_request(f"/campaigns/{campaign_id}/actions/test", body=body, method="POST")
+    return json.dumps({"status": "test_sent", "campaign_id": campaign_id, "test_emails": email_list}, indent=2)
+
+
+@mcp.tool()
+def cancel_send(campaign_id: str) -> str:
+    """Cancel a campaign that is currently sending. Only works for campaigns with status 'sending'.
+
+    Args:
+        campaign_id: The campaign ID to cancel.
+    """
+    if (guard := _guard_write(action="cancel campaign send", campaign_id=campaign_id)):
+        return guard
+    mc_request(f"/campaigns/{campaign_id}/actions/cancel-send", method="POST")
+    return json.dumps({"status": "cancelled", "campaign_id": campaign_id}, indent=2)
+
+
 # --- Write Tools: Tags & Segments ---
 
 @mcp.tool()
-def create_segment(list_id: str, name: str, static: bool = True) -> str:
-    """Create a new segment (or tag) in an audience.
+def create_segment(list_id: str, name: str, static: bool = True, match: Optional[str] = None, conditions_json: Optional[str] = None) -> str:
+    """Create a new segment (or tag) in an audience. For dynamic segments, provide match and conditions_json.
 
     Args:
         list_id: The Mailchimp audience/list ID.
         name: Name of the segment/tag.
         static: If True, creates a static segment (tag). If False, creates a saved segment.
+        match: Condition match type: 'all' or 'any'. Required for dynamic segments.
+        conditions_json: JSON string of conditions array for dynamic segments.
+            Example: '[{"condition_type":"TextMerge","field":"merge_fields/FNAME","op":"is","value":"John"}]'
     """
     if (guard := _guard_write(action="create segment", list_id=list_id, name=name)):
         return guard
     body: dict = {"name": name}
-    if static:
+    if match and conditions_json:
+        conditions = json.loads(conditions_json)
+        body["options"] = {"match": match, "conditions": conditions}
+    elif static:
         body["static_segment"] = []
     data = mc_request(f"/lists/{list_id}/segments", body=body, method="POST")
     return json.dumps({
@@ -651,6 +782,7 @@ def create_segment(list_id: str, name: str, static: bool = True) -> str:
         "name": data.get("name"),
         "member_count": data.get("member_count"),
         "type": data.get("type"),
+        "options": data.get("options"),
     }, indent=2)
 
 
@@ -715,6 +847,364 @@ def remove_members_from_segment(list_id: str, segment_id: str, emails: str) -> s
         "total_removed": data.get("total_removed"),
         "errors": data.get("errors", []),
     }, indent=2)
+
+
+@mcp.tool()
+def update_segment(list_id: str, segment_id: str, name: Optional[str] = None, match: Optional[str] = None, conditions_json: Optional[str] = None) -> str:
+    """Update a segment's name or conditions.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        segment_id: The segment ID to update.
+        name: New name for the segment.
+        match: Condition match type: 'all' or 'any'.
+        conditions_json: JSON string of conditions array.
+            Example: '[{"condition_type":"TextMerge","field":"merge_fields/FNAME","op":"is","value":"John"}]'
+    """
+    if (guard := _guard_write(action="update segment", list_id=list_id, segment_id=segment_id)):
+        return guard
+    body: dict = {}
+    if name:
+        body["name"] = name
+    if match and conditions_json:
+        conditions = json.loads(conditions_json)
+        body["options"] = {"match": match, "conditions": conditions}
+    data = mc_request(f"/lists/{list_id}/segments/{segment_id}", body=body, method="PATCH")
+    return json.dumps({
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "member_count": data.get("member_count"),
+        "type": data.get("type"),
+        "options": data.get("options"),
+    }, indent=2)
+
+
+@mcp.tool()
+def get_segment(list_id: str, segment_id: str) -> str:
+    """Get detailed information about a specific segment, including conditions for dynamic segments.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        segment_id: The segment ID.
+    """
+    data = mc_request(f"/lists/{list_id}/segments/{segment_id}")
+    return json.dumps({
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "member_count": data.get("member_count"),
+        "type": data.get("type"),
+        "created_at": data.get("created_at"),
+        "updated_at": data.get("updated_at"),
+        "options": data.get("options"),
+    }, indent=2)
+
+
+@mcp.tool()
+def list_segment_members(list_id: str, segment_id: str, count: int = 20, offset: int = 0) -> str:
+    """List members in a specific segment.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        segment_id: The segment ID.
+        count: Number of members to return (default 20).
+        offset: Pagination offset.
+    """
+    data = mc_request(f"/lists/{list_id}/segments/{segment_id}/members", params={"count": count, "offset": offset})
+    members = []
+    for m in data.get("members", []):
+        members.append({
+            "id": m.get("id"),
+            "email_address": m.get("email_address"),
+            "status": m.get("status"),
+            "full_name": m.get("full_name"),
+            "merge_fields": m.get("merge_fields"),
+        })
+    return json.dumps({"total_items": data.get("total_items"), "members": members}, indent=2)
+
+
+# --- Read/Write Tools: Merge Fields ---
+
+@mcp.tool()
+def list_merge_fields(list_id: str, count: int = 50, offset: int = 0) -> str:
+    """List merge fields (custom fields) for an audience.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        count: Number of merge fields to return (default 50).
+        offset: Pagination offset.
+    """
+    data = mc_request(f"/lists/{list_id}/merge-fields", params={"count": count, "offset": offset})
+    fields = []
+    for f in data.get("merge_fields", []):
+        fields.append({
+            "merge_id": f.get("merge_id"),
+            "tag": f.get("tag"),
+            "name": f.get("name"),
+            "type": f.get("type"),
+            "required": f.get("required"),
+            "default_value": f.get("default_value"),
+            "options": f.get("options"),
+        })
+    return json.dumps({"total_items": data.get("total_items"), "merge_fields": fields}, indent=2)
+
+
+@mcp.tool()
+def create_merge_field(list_id: str, name: str, type: str, tag: Optional[str] = None, required: bool = False, default_value: Optional[str] = None, choices: Optional[str] = None) -> str:
+    """Create a new merge field (custom field) in an audience.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        name: Display name for the merge field.
+        type: Field type: text, number, address, date, birthday, phone, url, imageurl, zip, dropdown, radio.
+        tag: Short tag name (e.g. 'COMPANY'). Auto-generated if omitted.
+        required: Whether the field is required (default False).
+        default_value: Default value for the field.
+        choices: Comma-separated choices for dropdown or radio types.
+    """
+    if (guard := _guard_write(action="create merge field", list_id=list_id, name=name, type=type)):
+        return guard
+    body: dict = {"name": name, "type": type, "required": required}
+    if tag:
+        body["tag"] = tag
+    if default_value:
+        body["default_value"] = default_value
+    if choices:
+        body["options"] = {"choices": [c.strip() for c in choices.split(",")]}
+    data = mc_request(f"/lists/{list_id}/merge-fields", body=body, method="POST")
+    return json.dumps({
+        "merge_id": data.get("merge_id"),
+        "tag": data.get("tag"),
+        "name": data.get("name"),
+        "type": data.get("type"),
+        "required": data.get("required"),
+    }, indent=2)
+
+
+@mcp.tool()
+def update_merge_field(list_id: str, merge_id: str, name: Optional[str] = None, required: Optional[bool] = None, default_value: Optional[str] = None, choices: Optional[str] = None) -> str:
+    """Update an existing merge field in an audience.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        merge_id: The merge field ID to update.
+        name: New display name.
+        required: Whether the field is required.
+        default_value: New default value.
+        choices: New comma-separated choices for dropdown or radio types.
+    """
+    if (guard := _guard_write(action="update merge field", list_id=list_id, merge_id=merge_id)):
+        return guard
+    body: dict = {}
+    if name is not None:
+        body["name"] = name
+    if required is not None:
+        body["required"] = required
+    if default_value is not None:
+        body["default_value"] = default_value
+    if choices is not None:
+        body["options"] = {"choices": [c.strip() for c in choices.split(",")]}
+    data = mc_request(f"/lists/{list_id}/merge-fields/{merge_id}", body=body, method="PATCH")
+    return json.dumps({
+        "merge_id": data.get("merge_id"),
+        "tag": data.get("tag"),
+        "name": data.get("name"),
+        "type": data.get("type"),
+        "required": data.get("required"),
+    }, indent=2)
+
+
+@mcp.tool()
+def delete_merge_field(list_id: str, merge_id: str) -> str:
+    """Delete a merge field from an audience. This is irreversible -- all data stored in this
+    field for every member will be lost.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        merge_id: The merge field ID to delete.
+    """
+    if (guard := _guard_write(action="delete merge field", list_id=list_id, merge_id=merge_id)):
+        return guard
+    mc_request(f"/lists/{list_id}/merge-fields/{merge_id}", method="DELETE")
+    return json.dumps({"status": "deleted", "merge_id": merge_id}, indent=2)
+
+
+# --- Read/Write Tools: Interest Categories & Groups ---
+
+@mcp.tool()
+def list_interest_categories(list_id: str, count: int = 50, offset: int = 0) -> str:
+    """List interest categories (groups) for an audience.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        count: Number of categories to return (default 50).
+        offset: Pagination offset.
+    """
+    data = mc_request(f"/lists/{list_id}/interest-categories", params={"count": count, "offset": offset})
+    categories = []
+    for c in data.get("categories", []):
+        categories.append({
+            "id": c.get("id"),
+            "title": c.get("title"),
+            "type": c.get("type"),
+            "list_id": c.get("list_id"),
+        })
+    return json.dumps({"total_items": data.get("total_items"), "categories": categories}, indent=2)
+
+
+@mcp.tool()
+def create_interest_category(list_id: str, title: str, type: str) -> str:
+    """Create a new interest category (group) in an audience.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        title: Display title for the category.
+        type: Input type: 'checkboxes', 'dropdown', 'radio', or 'hidden'.
+    """
+    if (guard := _guard_write(action="create interest category", list_id=list_id, title=title)):
+        return guard
+    body = {"title": title, "type": type}
+    data = mc_request(f"/lists/{list_id}/interest-categories", body=body, method="POST")
+    return json.dumps({
+        "id": data.get("id"),
+        "title": data.get("title"),
+        "type": data.get("type"),
+        "list_id": data.get("list_id"),
+    }, indent=2)
+
+
+@mcp.tool()
+def list_interests(list_id: str, category_id: str, count: int = 50, offset: int = 0) -> str:
+    """List interests (options) within an interest category.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        category_id: The interest category ID.
+        count: Number of interests to return (default 50).
+        offset: Pagination offset.
+    """
+    data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests", params={"count": count, "offset": offset})
+    interests = []
+    for i in data.get("interests", []):
+        interests.append({
+            "id": i.get("id"),
+            "name": i.get("name"),
+            "subscriber_count": i.get("subscriber_count"),
+            "display_order": i.get("display_order"),
+        })
+    return json.dumps({"total_items": data.get("total_items"), "interests": interests}, indent=2)
+
+
+@mcp.tool()
+def create_interest(list_id: str, category_id: str, name: str) -> str:
+    """Create a new interest (option) within an interest category.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        category_id: The interest category ID.
+        name: Name of the interest option.
+    """
+    if (guard := _guard_write(action="create interest", list_id=list_id, category_id=category_id, name=name)):
+        return guard
+    body = {"name": name}
+    data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests", body=body, method="POST")
+    return json.dumps({
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "subscriber_count": data.get("subscriber_count"),
+    }, indent=2)
+
+
+@mcp.tool()
+def delete_interest_category(list_id: str, category_id: str) -> str:
+    """Delete an interest category and all its interests. This is irreversible.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        category_id: The interest category ID to delete.
+    """
+    if (guard := _guard_write(action="delete interest category", list_id=list_id, category_id=category_id)):
+        return guard
+    mc_request(f"/lists/{list_id}/interest-categories/{category_id}", method="DELETE")
+    return json.dumps({"status": "deleted", "category_id": category_id}, indent=2)
+
+
+@mcp.tool()
+def delete_interest(list_id: str, category_id: str, interest_id: str) -> str:
+    """Delete an interest (option) from an interest category. This is irreversible.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        category_id: The interest category ID.
+        interest_id: The interest ID to delete.
+    """
+    if (guard := _guard_write(action="delete interest", list_id=list_id, category_id=category_id, interest_id=interest_id)):
+        return guard
+    mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests/{interest_id}", method="DELETE")
+    return json.dumps({"status": "deleted", "interest_id": interest_id}, indent=2)
+
+
+# --- Read/Write Tools: Webhooks ---
+
+@mcp.tool()
+def list_webhooks(list_id: str) -> str:
+    """List webhooks configured for an audience.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+    """
+    data = mc_request(f"/lists/{list_id}/webhooks")
+    webhooks = []
+    for w in data.get("webhooks", []):
+        webhooks.append({
+            "id": w.get("id"),
+            "url": w.get("url"),
+            "events": w.get("events"),
+            "sources": w.get("sources"),
+            "list_id": w.get("list_id"),
+        })
+    return json.dumps({"total_items": data.get("total_items"), "webhooks": webhooks}, indent=2)
+
+
+@mcp.tool()
+def create_webhook(list_id: str, url: str, events: Optional[str] = None, sources: Optional[str] = None) -> str:
+    """Create a webhook for an audience to receive notifications on member events.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        url: The URL to receive webhook POST requests.
+        events: Comma-separated events to listen for: subscribe, unsubscribe, profile, cleaned, upemail, campaign.
+        sources: Comma-separated sources to listen for: user, admin, api.
+    """
+    if (guard := _guard_write(action="create webhook", list_id=list_id, url=url)):
+        return guard
+    body: dict = {"url": url}
+    if events:
+        event_list = [e.strip() for e in events.split(",")]
+        body["events"] = {e: True for e in event_list}
+    if sources:
+        source_list = [s.strip() for s in sources.split(",")]
+        body["sources"] = {s: True for s in source_list}
+    data = mc_request(f"/lists/{list_id}/webhooks", body=body, method="POST")
+    return json.dumps({
+        "id": data.get("id"),
+        "url": data.get("url"),
+        "events": data.get("events"),
+        "sources": data.get("sources"),
+    }, indent=2)
+
+
+@mcp.tool()
+def delete_webhook(list_id: str, webhook_id: str) -> str:
+    """Delete a webhook from an audience. This is irreversible.
+
+    Args:
+        list_id: The Mailchimp audience/list ID.
+        webhook_id: The webhook ID to delete.
+    """
+    if (guard := _guard_write(action="delete webhook", list_id=list_id, webhook_id=webhook_id)):
+        return guard
+    mc_request(f"/lists/{list_id}/webhooks/{webhook_id}", method="DELETE")
+    return json.dumps({"status": "deleted", "webhook_id": webhook_id}, indent=2)
 
 
 # --- Read Tools: Detailed Reports ---
