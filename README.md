@@ -45,19 +45,19 @@ Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api
 No installation needed — run directly:
 
 ```bash
-uvx mailchimp-mcp-server
+uvx mailchimp-mcp
 ```
 
 ### Using `pip`
 
 ```bash
-pip install mailchimp-mcp-server
+pip install mailchimp-mcp
 ```
 
 Then run:
 
 ```bash
-mailchimp-mcp-server
+mailchimp-mcp
 ```
 
 ### From source
@@ -90,6 +90,8 @@ The datacenter (`us8`, `us21`, etc.) is automatically extracted from the key.
 
 Add this to your `claude_desktop_config.json`:
 
+> **Windows (Microsoft Store)**: If Claude Desktop was installed via the Microsoft Store, the config file is located at `C:\Users\<user>\AppData\Local\Packages\Claude_<id>\LocalCache\Roaming\Claude\claude_desktop_config.json` instead of the usual `%APPDATA%\Claude\` path.
+
 <details>
 <summary>Using uvx (recommended)</summary>
 
@@ -98,7 +100,7 @@ Add this to your `claude_desktop_config.json`:
   "mcpServers": {
     "mailchimp": {
       "command": "uvx",
-      "args": ["mailchimp-mcp-server"],
+      "args": ["mailchimp-mcp"],
       "env": {
         "MAILCHIMP_API_KEY": "your-api-key-here"
       }
@@ -115,7 +117,7 @@ Add this to your `claude_desktop_config.json`:
 {
   "mcpServers": {
     "mailchimp": {
-      "command": "mailchimp-mcp-server",
+      "command": "mailchimp-mcp",
       "env": {
         "MAILCHIMP_API_KEY": "your-api-key-here"
       }
@@ -133,7 +135,7 @@ Add this to your `claude_desktop_config.json`:
   "mcpServers": {
     "mailchimp": {
       "command": "uvx",
-      "args": ["mailchimp-mcp-server"],
+      "args": ["mailchimp-mcp"],
       "env": {
         "MAILCHIMP_API_KEY": "your-api-key-here",
         "MAILCHIMP_READ_ONLY": "true"
@@ -150,7 +152,7 @@ Add this to your `claude_desktop_config.json`:
 claude mcp add mailchimp \
   -s user \
   -e MAILCHIMP_API_KEY=your-api-key-here \
-  -- uvx mailchimp-mcp-server
+  -- uvx mailchimp-mcp
 ```
 
 For read-only mode:
@@ -160,7 +162,7 @@ claude mcp add mailchimp \
   -s user \
   -e MAILCHIMP_API_KEY=your-api-key-here \
   -e MAILCHIMP_READ_ONLY=true \
-  -- uvx mailchimp-mcp-server
+  -- uvx mailchimp-mcp
 ```
 
 ## Available Tools
