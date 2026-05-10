@@ -2547,6 +2547,139 @@ def list_batches(count: int = 20, offset: int = 0) -> str:
     return json.dumps({"total_items": data.get("total_items"), "batches": batches}, indent=2)
 
 
+# --- Tools: Ping & Search ---
+
+@mcp.tool()
+def ping() -> str:
+    """Check API connectivity and verify that the Mailchimp API key is valid.
+
+    Use this tool as a health check before running other operations, or to verify that the
+    API key is correctly configured. Returns basic health info without requiring any audience
+    or campaign data. Do not use get_account_info for health checks; this tool is faster and
+    purpose-built for connectivity verification. Read-only. Does not modify data.
+
+    Args:
+        No parameters required.
+
+    Returns:
+        JSON with fields: health_check ('ok' if connected), status_code (200 if healthy).
+
+    Example:
+        ping() -> {"health_check": "ok", "status_code": 200}
+    """
+    data = mc_request("/ping")
+    return json.dumps({
+        "health_check": data.get("health_check"),
+        "status_code": 200 if "health_check" in data else data.get("status", 0),
+    }, indent=2)
+
+
+@mcp.tool()
+def search_campaigns(query: str, count: int = 20, offset: int = 0) -> str:
+    """Search campaigns by query string across titles, subject lines, and content.
+
+    Use this tool to find campaigns by keyword when you do not know the campaign ID. Returns
+    matching campaigns with basic metadata. Use list_campaigns instead to browse all campaigns
+    by status or date. Use get_campaign_details to get full settings for a specific campaign
+    once you have its ID. Read-only. Does not modify data.
+
+    Args:
+        query: Search query string. Matches against campaign titles, subject lines, and
+            list names (e.g. 'spring sale', 'newsletter', 'promo').
+        count: Number of results to return (1-1000, default 20).
+        offset: Pagination offset for retrieving additional pages.
+
+    Returns:
+        JSON with total_items and results array. Each result includes: campaign (id, type,
+        status, title, subject_line, send_time, emails_sent).
+
+    Example:
+        search_campaigns(query="spring sale") -> {"total_items": 3, "results": [{"campaign": {"id": "abc123", "title": "Spring Sale 2025", ...}}]}
+    """
+    data = mc_request("/search-campaigns", params={"query": query, "count": count, "offset": offset})
+    results = []
+    for r in data.get("results", []):
+        c = r.get("campaign", {})
+        results.append({
+            "campaign": {
+                "id": c.get("id"),
+                "type": c.get("type"),
+                "status": c.get("status"),
+                "title": c.get("settings", {}).get("title"),
+                "subject_line": c.get("settings", {}).get("subject_line"),
+                "send_time": c.get("send_time"),
+                "emails_sent": c.get("emails_sent"),
+            }
+        })
+    return json.dumps({"total_items": data.get("total_items"), "results": results}, indent=2)
+
+
+@mcp.tool()
+def resend_to_non_openers(campaign_id: str) -> str:
+    """Create a new campaign targeting recipients who did not open the original campaign.
+
+    Use this tool to automatically resend a campaign to non-openers with a potentially
+    different subject line. The original campaign must have been sent. This creates a new
+    campaign in 'save' (draft) status that targets only members who did not open the original.
+    You can modify the new campaign's subject line via update_campaign before sending.
+    Use send_campaign or schedule_campaign to deliver the resend. Respects read-only and
+    dry-run modes.
+
+    Args:
+        campaign_id: The ID of the original sent campaign to resend (e.g. 'abc123def4').
+            Must be a campaign that has already been sent.
+
+    Returns:
+        JSON with fields: id (the new campaign's ID), status ('save'), title, web_id.
+        The new campaign is a draft ready for review and sending.
+
+    Example:
+        resend_to_non_openers(campaign_id="abc123") -> {"id": "def456", "status": "save", "title": "Spring Sale (Resend)", ...}
+    """
+    if (guard := _guard_write(action="resend to non-openers", campaign_id=campaign_id)):
+        return guard
+    data = mc_request(f"/campaigns/{campaign_id}/actions/create-resend", method="POST")
+    return json.dumps({
+        "id": data.get("id"),
+        "status": data.get("status"),
+        "title": data.get("settings", {}).get("title"),
+        "web_id": data.get("web_id"),
+    }, indent=2)
+
+
+@mcp.tool()
+def trigger_customer_journey(journey_id: str, step_id: str, email_address: str) -> str:
+    """Trigger a contact into a specific step of a Customer Journey workflow.
+
+    Use this tool to programmatically enroll a contact into a Customer Journey at a specific
+    entry point. Customer Journeys are the successor to Classic Automations and support
+    complex multi-step workflows with branching logic. The contact must already exist in the
+    audience associated with the journey. Use list_automations to find automation/journey IDs.
+    Respects read-only and dry-run modes.
+
+    Args:
+        journey_id: The Customer Journey ID (e.g. 'journey123').
+        step_id: The specific step ID to trigger the contact into. This is the entry point
+            step configured in the journey.
+        email_address: Email address of the contact to enroll. Must be a subscribed member
+            of the journey's audience.
+
+    Returns:
+        JSON with fields: status ('triggered'), journey_id, step_id, email_address.
+
+    Example:
+        trigger_customer_journey(journey_id="j123", step_id="s456", email_address="jane@co.com") -> {"status": "triggered", ...}
+    """
+    if (guard := _guard_write(action="trigger customer journey", journey_id=journey_id, step_id=step_id, email_address=email_address)):
+        return guard
+    mc_request(
+        f"/customer-journeys/journeys/{journey_id}/steps/{step_id}/actions/trigger",
+        body={"email_address": email_address},
+        method="POST",
+    )
+    return json.dumps({"status": "triggered", "journey_id": journey_id, "step_id": step_id, "email_address": email_address}, indent=2)
+
+
 def main():
     mcp.run()
 
