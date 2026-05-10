@@ -4,7 +4,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io)
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/). 78 tools to query and manage your Mailchimp account directly from Claude.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/). 82 tools to query and manage your Mailchimp account directly from Claude.
 
 Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api/) via [`requests`](https://pypi.org/project/requests/). Not based on the official [mailchimp-marketing-python](https://github.com/mailchimp/mailchimp-marketing-python) client. I hit too many issues with it so I went with raw HTTP calls instead.
 
@@ -28,7 +28,7 @@ Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api
 - **Webhooks** - List configured webhooks
 - **Segments** - Get segment details, conditions, and member lists
 - **Automations** - List workflows, inspect emails in a workflow, view queues
-- **Templates** - Browse available email templates
+- **Templates** - Browse templates and extract HTML content
 - **Landing pages** - List and inspect landing pages
 - **E-commerce** - Stores, orders, products, customers (requires e-commerce integration)
 - **Campaign folders** - Browse folder organization
@@ -42,6 +42,7 @@ Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api
 - **Merge fields** - Create, update, delete custom fields
 - **Interest categories** - Create and delete categories and interests
 - **Webhooks** - Create and delete webhooks
+- **Templates** - Create, update, and delete email templates
 - **Automations** - Pause and start automation workflows
 - **Batch** - Run bulk API operations in a single request
 
@@ -313,6 +314,10 @@ claude mcp add mailchimp \
 | Tool | Description |
 |---|---|
 | `list_templates` | List available email templates |
+| `get_template_default_content` | Get template HTML content |
+| `create_template` | Create a new email template |
+| `update_template` | Update template name or HTML |
+| `delete_template` | Delete a user-created template |
 
 ### Landing Pages
 

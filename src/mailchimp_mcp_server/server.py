@@ -90,26 +90,20 @@ def get_account_info() -> str:
 
 @mcp.tool()
 def list_audiences(count: int = 10, offset: int = 0) -> str:
-    """List all audiences (lists) in the account with subscriber counts and engagement rates.
+    """List audiences (lists) with subscriber counts and engagement rates.
 
-    Use this as the first step in most workflows to discover audience IDs (list_id). Almost every
-    other tool requires a list_id from this output. Use get_audience_details when you already have
-    a list_id and need full stats. Do not use this to find a specific member; use search_members.
-    Most accounts have 1-5 audiences.
+    First step in most workflows to discover list_id values. Use get_audience_details for full
+    stats of a known audience. Use search_members to find a specific member.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Args:
-        count: Number of audiences to return (1-1000, default 10). Most accounts have fewer than 10.
+        count: Audiences to return (1-1000, default 10). Most accounts have fewer than 10.
         offset: Pagination offset. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and audiences array. Each audience: id (use as list_id in other
-        tools), name, member_count, unsubscribe_count, open_rate (decimal 0-1), click_rate
-        (decimal 0-1), date_created (ISO 8601).
-
-    Example:
-        list_audiences(count=5) -> {"total_items": 2, "audiences": [{"id": "abc123", "name": "Newsletter", "member_count": 5000, ...}]}
+        JSON with total_items and audiences array. Each: id (use as list_id), name, member_count,
+        unsubscribe_count, open_rate (0-1), click_rate (0-1), date_created.
     """
     data = mc_request("/lists", params={"count": count, "offset": offset})
     audiences = []
@@ -130,22 +124,18 @@ def list_audiences(count: int = 10, offset: int = 0) -> str:
 def get_audience_details(list_id: str) -> str:
     """Retrieve full stats, subscribe URL, and rating for a specific audience.
 
-    Use when you already have a list_id and need detailed metrics (member counts by status,
-    open/click rates, list rating 0-5) or the public subscribe URL. Use list_audiences instead
-    to browse all audiences and discover list_ids.
+    Use when you have a list_id and need detailed metrics or the public subscribe URL. Use
+    list_audiences to browse all audiences and discover list_ids instead.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 error if list_id is invalid.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
 
     Returns:
-        JSON with fields: id, name, stats (member_count, unsubscribe_count, open_rate, click_rate,
-        etc.), date_created (ISO 8601), list_rating (0-5), subscribe_url_short (public signup link).
-        Returns error object if list_id is invalid.
-
-    Example:
-        get_audience_details(list_id="abc123def4") -> {"id": "abc123def4", "name": "Newsletter", "stats": {"member_count": 5000, ...}, "list_rating": 4}
+        JSON with id, name, stats (member_count, unsubscribe_count, open_rate, click_rate),
+        date_created, list_rating (0-5), subscribe_url_short.
     """
     data = mc_request(f"/lists/{list_id}")
     return json.dumps({
@@ -244,28 +234,20 @@ def get_campaign_details(campaign_id: str) -> str:
 
 @mcp.tool()
 def get_campaign_report(campaign_id: str) -> str:
-    """Retrieve aggregate performance metrics for a sent campaign: opens, clicks, bounces, and industry benchmarks.
+    """Retrieve aggregate performance metrics for a sent campaign: opens, clicks, bounces, benchmarks.
 
-    Use for a high-level overview of campaign results. Use get_campaign_click_details for per-link
-    click data. Use get_open_details for per-recipient open data. Use get_campaign_recipients for
-    delivery status per recipient. Use get_campaign_sub_reports for A/B test variant results.
-    Only works for sent campaigns; returns an error for drafts or scheduled campaigns.
+    High-level overview. Use get_campaign_click_details for per-link data, get_open_details for
+    per-recipient opens, get_campaign_recipients for delivery status. Only works for sent campaigns.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Args:
-        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
-            Obtain from list_campaigns(status="sent").
+        campaign_id: Campaign ID (e.g. 'abc123def4'). Must be sent. Obtain from list_campaigns(status="sent").
 
     Returns:
-        JSON with fields: campaign_title, subject_line, emails_sent (int), abuse_reports (int),
-        unsubscribed (int), send_time (ISO 8601), opens (opens_total, unique_opens, open_rate as
-        decimal 0-1), clicks (clicks_total, unique_clicks, click_rate), bounces (hard_bounces,
-        soft_bounces), forwards (forwards_count, forwards_opens), list_stats, industry_stats
-        (open_rate, click_rate, bounce_rate for comparison).
-
-    Example:
-        get_campaign_report(campaign_id="abc123") -> {"emails_sent": 5000, "opens": {"open_rate": 0.25, "unique_opens": 1250}, ...}
+        JSON with campaign_title, subject_line, emails_sent, abuse_reports, unsubscribed, send_time,
+        opens (opens_total, unique_opens, open_rate 0-1), clicks (clicks_total, unique_clicks,
+        click_rate), bounces, forwards, list_stats, industry_stats.
     """
     data = mc_request(f"/reports/{campaign_id}")
     return json.dumps({
@@ -409,25 +391,20 @@ def search_members(query: str, list_id: Optional[str] = None) -> str:
 
 @mcp.tool()
 def get_audience_growth_history(list_id: str, count: int = 12) -> str:
-    """Retrieve monthly growth history for an audience showing subscribes, unsubscribes, and cleaned contacts over time.
+    """Retrieve monthly growth history for an audience (subscribes, unsubscribes, cleaned).
 
-    Use to analyze audience growth trends or detect unusual churn. Each record represents one
-    calendar month. Data starts from the audience creation date, ordered newest first. Use
-    get_audience_details for current totals instead of historical trends.
+    Each record is one calendar month, ordered newest first. Use get_audience_details for
+    current totals instead of historical trends.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        count: Number of months to return (1-1000, default 12). Set to 24 or 36 for longer trends.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        count: Months to return (1-1000, default 12).
 
     Returns:
-        JSON with list_id and history array. Each entry: month (YYYY-MM format), subscribed (int,
-        cumulative total), unsubscribed (int, cumulative), reconfirm (int), cleaned (int),
-        pending (int), transactional (int).
-
-    Example:
-        get_audience_growth_history(list_id="abc123def4", count=6) -> {"list_id": "abc123def4", "history": [{"month": "2025-06", "subscribed": 5200, "unsubscribed": 120, ...}]}
+        JSON with list_id and history array. Each: month (YYYY-MM), subscribed, unsubscribed,
+        reconfirm, cleaned, pending, transactional (all cumulative ints).
     """
     data = mc_request(f"/lists/{list_id}/growth-history", params={"count": count})
     history = []
@@ -446,26 +423,21 @@ def get_audience_growth_history(list_id: str, count: int = 12) -> str:
 
 @mcp.tool()
 def list_automations(count: int = 20, offset: int = 0) -> str:
-    """List automation workflows (automated email sequences) in the account with status and send counts.
+    """List automation workflows in the account with status and send counts.
 
-    Use to discover automation IDs and check their status. Use get_automation_emails to see
-    individual emails within a workflow. Use pause_automation/start_automation to control them.
-    Includes both Classic Automations and Customer Journeys.
+    Returns all automations regardless of status (sending, paused, draft), ordered by creation
+    date descending. Includes both Classic Automations and Customer Journeys. Use
+    get_automation_emails for individual emails within a workflow.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Args:
-        count: Number of automations to return (1-1000, default 20).
+        count: Automations to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and automations array. Each automation: id (use with
-        get_automation_emails, pause_automation, start_automation), status ('sending', 'paused',
-        'draft'), title, emails_sent (int), start_time (ISO 8601 or null), create_time (ISO 8601),
-        list_id (associated audience).
-
-    Example:
-        list_automations() -> {"total_items": 3, "automations": [{"id": "auto123", "status": "sending", "title": "Welcome Series", ...}]}
+        JSON with total_items and automations array. Each: id, status ('sending'/'paused'/'draft'),
+        title, emails_sent, start_time, create_time, list_id.
     """
     data = mc_request("/automations", params={"count": count, "offset": offset})
     automations = []
@@ -484,23 +456,21 @@ def list_automations(count: int = 20, offset: int = 0) -> str:
 
 @mcp.tool()
 def list_templates(count: int = 20, offset: int = 0) -> str:
-    """List email templates available in the account (both user-created and Mailchimp gallery templates).
+    """List email templates in the account (user-created and Mailchimp gallery templates).
 
-    Use to browse templates for reference when building campaign content via set_campaign_content.
-    Do not use this to find campaigns; use list_campaigns instead.
+    Use to browse templates and find template IDs. Use get_template_default_content to extract
+    HTML from a template. Use create_template to add new templates. Do not use to find campaigns;
+    use list_campaigns instead.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Args:
-        count: Number of templates to return (1-1000, default 20).
+        count: Templates to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and templates array. Each template: id (int), name, type ('user',
-        'gallery', 'base'), date_created (ISO 8601), active (boolean).
-
-    Example:
-        list_templates() -> {"total_items": 10, "templates": [{"id": 12345, "name": "Monthly Newsletter", "type": "user", ...}]}
+        JSON with total_items and templates array. Each: id (int), name, type ('user'/'gallery'/
+        'base'), date_created, active (boolean).
     """
     data = mc_request("/templates", params={"count": count, "offset": offset})
     templates = []
@@ -516,28 +486,141 @@ def list_templates(count: int = 20, offset: int = 0) -> str:
 
 
 @mcp.tool()
-def list_segments(list_id: str, count: int = 20, offset: int = 0) -> str:
-    """List all segments and tags for a specific audience with member counts and types.
+def get_template_default_content(template_id: str) -> str:
+    """Retrieve the default HTML content of a template for use in campaign content.
 
-    Use to discover segment IDs before targeting campaigns (create_campaign with segment_id) or
-    managing membership (add_members_to_segment). Returns both static segments (tags, manual) and
-    dynamic (saved) segments (auto-updated by conditions). Use get_segment for full details
-    including filter conditions.
+    Use to extract a template's HTML before customizing it with set_campaign_content. Only works
+    for user-created templates; gallery templates may return limited content. Use list_templates
+    to find template IDs.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 error if template_id is invalid.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        count: Number of segments to return (1-1000, default 20).
+        template_id: Template ID (numeric string, e.g. '12345'). Obtain from list_templates.
+
+    Returns:
+        JSON with html (string, full HTML content), sections (object with editable content blocks).
+    """
+    data = mc_request(f"/templates/{template_id}/default-content")
+    return json.dumps({
+        "html": data.get("html"),
+        "sections": data.get("sections"),
+    }, indent=2)
+
+
+@mcp.tool()
+def create_template(name: str, html: str, folder_id: Optional[str] = None) -> str:
+    """Create a new reusable email template from HTML content.
+
+    Use to save HTML email designs for reuse across campaigns. Retrieve template HTML later via
+    get_template_default_content for use with set_campaign_content. Use list_templates to browse
+    existing templates. Do not use for one-off emails; use set_campaign_content directly instead.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        name: Display name for the template (e.g. 'Monthly Newsletter v2').
+        html: Complete HTML content. Must be valid HTML with inline CSS for email client
+            compatibility. Mailchimp merge tags (e.g. *|FNAME|*, *|UNSUB|*) are supported.
+        folder_id: Optional template folder ID to organize the template. Obtain from the
+            Mailchimp web UI.
+
+    Returns:
+        JSON with id (int, new template ID), name, type ('user'), active (boolean), date_created.
+    """
+    if (guard := _guard_write(action="create template", name=name)):
+        return guard
+    body: dict = {"name": name, "html": html}
+    if folder_id:
+        body["folder_id"] = folder_id
+    data = mc_request("/templates", body=body, method="POST")
+    return json.dumps({
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "type": data.get("type"),
+        "active": data.get("active"),
+        "date_created": data.get("date_created"),
+    }, indent=2)
+
+
+@mcp.tool()
+def update_template(template_id: str, name: Optional[str] = None, html: Optional[str] = None) -> str:
+    """Update an existing template's name or HTML content.
+
+    Only provided fields are updated. Only works for user-created templates; gallery and base
+    templates cannot be modified. Use create_template to create a new template instead of
+    modifying a gallery template.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 error if template_id is invalid.
+
+    Args:
+        template_id: Template ID to update (numeric string, e.g. '12345'). Obtain from list_templates.
+        name: New display name for the template.
+        html: New HTML content. Replaces all existing content.
+
+    Returns:
+        JSON with id, name, type, active, date_edited.
+    """
+    if (guard := _guard_write(action="update template", template_id=template_id)):
+        return guard
+    body: dict = {}
+    if name is not None:
+        body["name"] = name
+    if html is not None:
+        body["html"] = html
+    data = mc_request(f"/templates/{template_id}", body=body, method="PATCH")
+    return json.dumps({
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "type": data.get("type"),
+        "active": data.get("active"),
+        "date_edited": data.get("date_edited"),
+    }, indent=2)
+
+
+@mcp.tool()
+def delete_template(template_id: str) -> str:
+    """Delete a user-created template permanently.
+
+    Irreversible. Only works for user-created templates; gallery and base templates cannot be
+    deleted. Does not affect campaigns already using this template's content. Use list_templates
+    to find template IDs.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 error if template_id is invalid or is not a user template.
+
+    Args:
+        template_id: Template ID to delete (numeric string, e.g. '12345'). Must be type 'user'.
+
+    Returns:
+        JSON with status ("deleted"), template_id.
+    """
+    if (guard := _guard_write(action="delete template", template_id=template_id)):
+        return guard
+    mc_request(f"/templates/{template_id}", method="DELETE")
+    return json.dumps({"status": "deleted", "template_id": template_id}, indent=2)
+
+
+@mcp.tool()
+def list_segments(list_id: str, count: int = 20, offset: int = 0) -> str:
+    """List segments and tags for an audience with member counts and types.
+
+    Use to discover segment IDs for campaign targeting or membership management. Returns both
+    static (tags, manual) and dynamic (saved, auto-updated) segments. Use get_segment for full
+    details including filter conditions.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        count: Segments to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and segments array. Each segment: id (int, use as segment_id in
-        other tools), name, member_count (int), type ('static' for tags, 'saved' for dynamic
-        segments), created_at (ISO 8601), updated_at (ISO 8601).
-
-    Example:
-        list_segments(list_id="abc123") -> {"total_items": 5, "segments": [{"id": 12345, "name": "VIP", "type": "static", "member_count": 150, ...}]}
+        JSON with total_items and segments array. Each: id (use as segment_id), name, member_count,
+        type ('static'/'saved'), created_at, updated_at.
     """
     data = mc_request(f"/lists/{list_id}/segments", params={"count": count, "offset": offset})
     segments = []
@@ -557,30 +640,26 @@ def list_segments(list_id: str, count: int = 20, offset: int = 0) -> str:
 
 @mcp.tool()
 def add_member(list_id: str, email_address: str, status: str = "subscribed", first_name: Optional[str] = None, last_name: Optional[str] = None, tags: Optional[str] = None) -> str:
-    """Add a single new member to an audience with optional name and tags.
+    """Add a new member to an audience with optional name and tags.
 
-    Use to subscribe one person. Use batch_subscribe for multiple members at once (up to 500).
-    Returns an error if the email already exists; use update_member to modify existing members.
-    Side effect: if status='pending', Mailchimp sends a double opt-in confirmation email to the address.
+    Creates a new contact. Returns "Member Exists" error if already present. Choose the right
+    member tool: add_member for new contacts, update_member to change profile/status of existing
+    contacts, tag_member to manage tags on existing contacts, batch_subscribe for bulk add/update
+    (up to 500), unsubscribe_member to opt out, delete_member for permanent GDPR removal. Side
+    effect: status='pending' triggers a double opt-in confirmation email.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        email_address: Email address of the new member. Must not already exist in the audience.
-        status: Subscription status. Valid values: 'subscribed' (default, immediate opt-in),
-            'pending' (triggers double opt-in confirmation email), 'unsubscribed', 'cleaned'.
-        first_name: First name, stored in the FNAME merge field.
-        last_name: Last name, stored in the LNAME merge field.
-        tags: Comma-separated tag names to apply (e.g. 'VIP,Newsletter'). Tags are created
-            automatically if they do not exist.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        email_address: Email of the new member. Must not already exist in the audience.
+        status: 'subscribed' (default), 'pending' (triggers opt-in email), 'unsubscribed', 'cleaned'.
+        first_name: First name (FNAME merge field).
+        last_name: Last name (LNAME merge field).
+        tags: Comma-separated tag names (e.g. 'VIP,Newsletter'). Created automatically if new.
 
     Returns:
-        JSON with fields: id (MD5 hash of email), email_address, status, full_name. Returns
-        error with title "Member Exists" if the email is already in the audience.
-
-    Example:
-        add_member(list_id="abc123", email_address="jane@co.com", first_name="Jane", tags="VIP") -> {"id": "abc123", "email_address": "jane@co.com", "status": "subscribed", ...}
+        JSON with id (MD5 hash of email), email_address, status, full_name.
     """
     if (guard := _guard_write(action="add member", email_address=email_address, list_id=list_id, status=status)):
         return guard
@@ -605,29 +684,27 @@ def add_member(list_id: str, email_address: str, status: str = "subscribed", fir
 
 @mcp.tool()
 def update_member(list_id: str, email_address: str, status: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None) -> str:
-    """Update an existing member's profile fields or subscription status.
+    """Update a member's profile fields or subscription status. Does not manage tags.
 
-    Use to change a member's name or status. Only provided fields are updated; omitted fields
-    remain unchanged. Use unsubscribe_member as a shortcut for status change to unsubscribed.
-    Use tag_member to manage tags. Use add_member if the member does not exist yet.
+    Only provided fields are updated; omitted fields remain unchanged. Idempotent: re-applying
+    the same values is safe. Side effect: changing status to 'pending' triggers a re-confirmation
+    email. Choose the right member tool: update_member for profile/status changes, tag_member for
+    tag management, unsubscribe_member as shortcut for opt-out, add_member if the contact does
+    not exist yet, batch_subscribe for bulk operations.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 error if member does not exist. Returns 400 if status transition is invalid
+    (e.g. cleaned to subscribed).
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        email_address: Email address of the member to update. Must already exist in the audience.
-            Use search_members to verify existence.
-        status: New subscription status. Valid values: 'subscribed', 'unsubscribed', 'cleaned',
-            'pending'. Changing to 'pending' triggers a re-confirmation email.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        email_address: Email of the member to update. Must exist in the audience.
+        status: New status: 'subscribed', 'unsubscribed', 'cleaned', 'pending'.
         first_name: New first name (FNAME merge field).
         last_name: New last name (LNAME merge field).
 
     Returns:
-        JSON with fields: id, email_address, status, full_name. Returns error if the member
-        does not exist in the audience.
-
-    Example:
-        update_member(list_id="abc123", email_address="jane@co.com", first_name="Janet") -> {"id": "abc123", "email_address": "jane@co.com", "status": "subscribed", "full_name": "Janet Doe"}
+        JSON with id, email_address, status, full_name.
     """
     if (guard := _guard_write(action="update member", email_address=email_address, list_id=list_id)):
         return guard
@@ -653,23 +730,19 @@ def update_member(list_id: str, email_address: str, status: Optional[str] = None
 
 @mcp.tool()
 def unsubscribe_member(list_id: str, email_address: str) -> str:
-    """Unsubscribe a member from an audience, preserving their profile and history for reporting.
+    """Unsubscribe a member from an audience, preserving profile and history for reporting.
 
-    Use to opt someone out while keeping their data. Reversible via update_member(status='subscribed').
-    Use delete_member instead to permanently remove all data (irreversible, for GDPR). Do not use
-    if the member does not exist; returns an error.
+    Reversible via update_member(status='subscribed'). Use delete_member for permanent removal
+    (GDPR). Returns 404 error if member does not exist.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        email_address: Email address of the member to unsubscribe. Must exist in the audience.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        email_address: Email of the member. Must be a valid email address and exist in the audience.
 
     Returns:
-        JSON with fields: email_address, status ("unsubscribed").
-
-    Example:
-        unsubscribe_member(list_id="abc123", email_address="jane@co.com") -> {"email_address": "jane@co.com", "status": "unsubscribed"}
+        JSON with email_address, status ("unsubscribed").
     """
     if (guard := _guard_write(action="unsubscribe member", email_address=email_address, list_id=list_id)):
         return guard
@@ -711,28 +784,25 @@ def delete_member(list_id: str, email_address: str) -> str:
 
 @mcp.tool()
 def tag_member(list_id: str, email_address: str, tags_to_add: Optional[str] = None, tags_to_remove: Optional[str] = None) -> str:
-    """Add or remove tags from a specific member. Tags are free-form labels for organizing contacts.
+    """Add or remove tags from a single member. Does not modify profile data or subscription status.
 
-    Use to manage per-member labels. Provide at least one of tags_to_add or tags_to_remove. Tags
-    are created automatically if they do not exist. Use get_member_tags to check current tags.
-    Use add_members_to_segment to add multiple members to a segment at once instead.
+    Tags are case-insensitive free-form labels. Added tags are created automatically if new;
+    removed tags are silently ignored if not present. Idempotent. Choose the right member tool:
+    tag_member for per-member tag changes, add_members_to_segment for bulk-adding members to a
+    tag/segment, add_member with tags param for tagging at signup, update_member for profile/status
+    changes, get_member_tags to check current tags.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key (read scope required). Max 10 concurrent requests. Respects
+    read-only and dry-run modes. Returns 404 error if the member does not exist.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        email_address: Email address of the member. Must exist in the audience.
-        tags_to_add: Comma-separated tag names to add (e.g. 'VIP,Returning Customer'). Tags
-            are created if they do not already exist.
-        tags_to_remove: Comma-separated tag names to remove (e.g. 'Trial'). Silently ignored
-            if the tag is not currently on the member.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        email_address: Email of the member. Must exist in the audience.
+        tags_to_add: Comma-separated tag names to add (e.g. 'VIP,Returning Customer').
+        tags_to_remove: Comma-separated tag names to remove (e.g. 'Trial').
 
     Returns:
-        JSON with fields: status ("updated"), email_address, tags (array of changes with name
-        and status 'active'/'inactive').
-
-    Example:
-        tag_member(list_id="abc123", email_address="jane@co.com", tags_to_add="VIP,Premium") -> {"status": "updated", "email_address": "jane@co.com", "tags": [{"name": "VIP", "status": "active"}, ...]}
+        JSON with status ("updated"), email_address, tags array with name and status 'active'/'inactive'.
     """
     if (guard := _guard_write(action="update member tags", email_address=email_address, list_id=list_id)):
         return guard
@@ -752,29 +822,22 @@ def tag_member(list_id: str, email_address: str, tags_to_add: Optional[str] = No
 
 @mcp.tool()
 def batch_subscribe(list_id: str, members_json: str, update_existing: bool = True) -> str:
-    """Add or update up to 500 members in an audience in a single synchronous request.
+    """Add or update up to 500 members in a single synchronous request.
 
-    Use when adding or updating more than one member at a time. Use add_member or update_member
-    for a single member. Use create_batch for imports larger than 500 members. Side effect: members
-    with status='pending' will each receive a double opt-in confirmation email.
+    Use for bulk operations. Choose the right member tool: batch_subscribe for 2-500 members,
+    add_member or update_member for a single member, create_batch for imports larger than 500.
+    Side effect: members with status='pending' each receive a double opt-in confirmation email.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        members_json: JSON string of members array (max 500 items). Each member requires at minimum:
-            email_address (string) and status ('subscribed', 'unsubscribed', 'cleaned', 'pending').
-            Optional fields: merge_fields (object), tags (array of strings).
-            Example: '[{"email_address":"a@b.com","status":"subscribed","merge_fields":{"FNAME":"Alice"}}]'
-        update_existing: If true (default), existing members are updated with provided data.
-            If false, existing members are skipped and counted as errors.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        members_json: JSON array of members (max 500). Each requires email_address and status
+            ('subscribed'/'unsubscribed'/'cleaned'/'pending'). Optional: merge_fields, tags.
+        update_existing: If true (default), existing members are updated. If false, skipped as errors.
 
     Returns:
-        JSON with fields: new_members (int), updated_members (int), errors (array with detail per
-        failed email), total_created (int), total_updated (int), error_count (int).
-
-    Example:
-        batch_subscribe(list_id="abc123", members_json='[{"email_address":"a@b.com","status":"subscribed"}]') -> {"total_created": 1, "total_updated": 0, "error_count": 0, ...}
+        JSON with new_members, updated_members, errors array, total_created, total_updated, error_count.
     """
     if (guard := _guard_write(action="batch subscribe members", list_id=list_id)):
         return guard
@@ -793,29 +856,24 @@ def batch_subscribe(list_id: str, members_json: str, update_existing: bool = Tru
 
 @mcp.tool()
 def update_audience(list_id: str, name: Optional[str] = None, from_name: Optional[str] = None, from_email: Optional[str] = None, subject: Optional[str] = None, permission_reminder: Optional[str] = None) -> str:
-    """Update audience-level settings: name, default campaign sender, subject, and permission reminder.
+    """Update audience-level settings: name, default sender, subject, and permission reminder.
 
-    Use to change defaults that apply to newly created campaigns for this audience. Does not
-    retroactively affect existing campaigns. Only provided fields are updated; omitted fields
-    remain unchanged. Use get_audience_details to check current settings before updating.
+    Changes apply to newly created campaigns only; does not retroactively affect existing ones.
+    Only provided fields are updated. Use get_audience_details to check current settings.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        name: New audience display name.
-        from_name: Default 'from' name for new campaigns sent to this audience.
-        from_email: Default 'from' email. Must be a verified sending domain in Mailchimp.
-        subject: Default email subject line for new campaigns.
-        permission_reminder: Text shown to subscribers explaining why they receive emails.
-            Required by CAN-SPAM.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        name: New audience display name (shown in Mailchimp UI and audience picker).
+        from_name: Default sender name for new campaigns (e.g. 'Marketing Team'). Max 100 chars.
+        from_email: Default sender email. Must be a verified sending domain in Mailchimp.
+        subject: Default subject line for new campaigns (e.g. 'Monthly Update'). Max 150 chars.
+        permission_reminder: Why subscribers receive emails (required by CAN-SPAM).
 
     Returns:
-        JSON with fields: id, name, permission_reminder, campaign_defaults (object with from_name,
-        from_email, subject, language).
-
-    Example:
-        update_audience(list_id="abc123def4", name="VIP Newsletter") -> {"id": "abc123def4", "name": "VIP Newsletter", "campaign_defaults": {...}}
+        JSON with id, name, permission_reminder, campaign_defaults (from_name, from_email, subject,
+        language).
     """
     if (guard := _guard_write(action="update audience", list_id=list_id)):
         return guard
@@ -1138,27 +1196,21 @@ def send_campaign(campaign_id: str) -> str:
 
 @mcp.tool()
 def send_test_email(campaign_id: str, test_emails: str, send_type: str = "html") -> str:
-    """Send a test/preview email to specific addresses without sending to the full audience.
+    """Send a test/preview email to specific addresses without affecting the real audience.
 
-    Use to preview a campaign before sending to real recipients. The campaign must have content
-    set via set_campaign_content. Test emails do not count against send limits and are not tracked
-    in reports. Side effect: sends a real email to the specified addresses. Recommended step
-    before send_campaign or schedule_campaign.
+    Side effect: sends a real email. Tests do not count against send limits and are not tracked
+    in reports. Campaign must have content set via set_campaign_content. Recommended before
+    send_campaign or schedule_campaign.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
 
     Args:
-        campaign_id: The campaign ID (e.g. 'abc123def4'). Must have content set.
-        test_emails: Comma-separated email addresses to send the test to (e.g. 'me@co.com,team@co.com').
-            Maximum of 10 test addresses per request.
-        send_type: Format of the test email. Valid values: 'html' (default), 'plaintext'.
+        campaign_id: Campaign ID (e.g. 'abc123def4'). Must have content set.
+        test_emails: Comma-separated emails (e.g. 'me@co.com,team@co.com'). Max 10 per request.
+        send_type: Format: 'html' (default) or 'plaintext'.
 
     Returns:
-        JSON with fields: status ("test_sent"), campaign_id, test_emails (array). Returns error
-        if campaign has no content.
-
-    Example:
-        send_test_email(campaign_id="abc123", test_emails="me@company.com") -> {"status": "test_sent", "campaign_id": "abc123", "test_emails": ["me@company.com"]}
+        JSON with status ("test_sent"), campaign_id, test_emails array. Error if no content set.
     """
     if (guard := _guard_write(action="send test email", campaign_id=campaign_id)):
         return guard
@@ -1170,25 +1222,18 @@ def send_test_email(campaign_id: str, test_emails: str, send_type: str = "html")
 
 @mcp.tool()
 def cancel_send(campaign_id: str) -> str:
-    """Cancel a campaign that is currently in the process of sending, stopping delivery to remaining recipients.
+    """Cancel a campaign mid-send, stopping delivery to remaining recipients.
 
-    Use to stop a campaign mid-send. Only works on campaigns with status 'sending'; returns error
-    for drafts, scheduled, or already-sent campaigns. Recipients who already received the email
-    are not affected; already-delivered emails cannot be recalled. Use unschedule_campaign instead
-    to cancel a scheduled (not yet sending) campaign.
+    Only works on campaigns with status 'sending'. Already-delivered emails cannot be recalled.
+    Irreversible. Use unschedule_campaign for scheduled (not yet sending) campaigns instead.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). This operation is irreversible. Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
 
     Args:
-        campaign_id: The campaign ID to cancel (e.g. 'abc123def4'). Must be in 'sending' status.
-            Obtain from list_campaigns(status='sending').
+        campaign_id: Campaign ID (e.g. 'abc123def4'). Must be in 'sending' status.
 
     Returns:
-        JSON with fields: status ("cancelled"), campaign_id. Returns error if the campaign is
-        not currently sending.
-
-    Example:
-        cancel_send(campaign_id="abc123") -> {"status": "cancelled", "campaign_id": "abc123"}
+        JSON with status ("cancelled"), campaign_id. Error if not currently sending.
     """
     if (guard := _guard_write(action="cancel campaign send", campaign_id=campaign_id)):
         return guard
@@ -1202,29 +1247,21 @@ def cancel_send(campaign_id: str) -> str:
 def create_segment(list_id: str, name: str, static: bool = True, match: Optional[str] = None, conditions_json: Optional[str] = None) -> str:
     """Create a new segment or tag in an audience for grouping members.
 
-    Use to create either a static segment (tag, manual membership) or a dynamic (saved) segment
-    with auto-membership based on conditions. For static segments, use add_members_to_segment
-    afterward to populate. Use tag_member to apply tags to individual members one at a time.
+    Static segments (default) have manual membership via add_members_to_segment. Dynamic segments
+    auto-update based on filter conditions. No destructive side effects. Use tag_member to apply
+    tags to individual members instead.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
         name: Display name for the segment or tag.
-        static: If true (default), creates a static segment (tag) with manual membership.
-            If false, creates a dynamic segment; match and conditions_json are required.
-        match: Condition match type for dynamic segments. Valid values: 'all' (AND logic),
-            'any' (OR logic). Required when static=false, ignored when static=true.
-        conditions_json: JSON string of conditions array for dynamic segments. Required when
-            static=false. Example: '[{"condition_type":"TextMerge","field":"merge_fields/FNAME","op":"is","value":"John"}]'
+        static: True (default) for manual membership; false for dynamic (requires match + conditions_json).
+        match: Condition logic for dynamic segments: 'all' (AND) or 'any' (OR). Required when static=false.
+        conditions_json: JSON conditions array for dynamic segments. Required when static=false.
 
     Returns:
-        JSON with fields: id (int, the new segment ID for use with add_members_to_segment,
-        create_campaign), name, member_count, type ('static' or 'saved'), options (conditions
-        for dynamic segments, null for static).
-
-    Example:
-        create_segment(list_id="abc123", name="VIP Customers") -> {"id": 12345, "name": "VIP Customers", "type": "static", ...}
+        JSON with id (new segment ID), name, member_count, type ('static'/'saved'), options.
     """
     if (guard := _guard_write(action="create segment", list_id=list_id, name=name)):
         return guard
@@ -1246,24 +1283,20 @@ def create_segment(list_id: str, name: str, static: bool = True, match: Optional
 
 @mcp.tool()
 def delete_segment(list_id: str, segment_id: str) -> str:
-    """Delete a segment or tag from an audience. Members themselves are not removed.
+    """Delete a segment or tag from an audience. Members remain in the audience.
 
-    Use to remove a segment you no longer need. The segment association with members is removed,
-    but members stay in the audience. Cannot be undone. Use list_segments to find segment IDs.
+    Irreversible. Use update_segment to rename or modify conditions instead of deleting. Use
+    list_segments to find segment IDs.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). This operation is irreversible. Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 error if segment does not exist.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        segment_id: The segment/tag ID to delete (numeric string, e.g. '12345'). Obtain from
-            list_segments.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        segment_id: Segment/tag ID to delete (numeric string, e.g. '12345'). Obtain from list_segments.
 
     Returns:
-        JSON with fields: status ("deleted"), segment_id. Returns error if the segment does
-        not exist.
-
-    Example:
-        delete_segment(list_id="abc123", segment_id="12345") -> {"status": "deleted", "segment_id": "12345"}
+        JSON with status ("deleted"), segment_id.
     """
     if (guard := _guard_write(action="delete segment", list_id=list_id, segment_id=segment_id)):
         return guard
@@ -1273,27 +1306,20 @@ def delete_segment(list_id: str, segment_id: str) -> str:
 
 @mcp.tool()
 def add_members_to_segment(list_id: str, segment_id: str, emails: str) -> str:
-    """Add multiple members to a static segment or tag by email address in a single request.
+    """Add members to a static segment or tag by email address.
 
-    Use to bulk-add members to an existing static segment. Only works on static segments (tags),
-    not dynamic (saved) segments; use get_segment to check segment type. Members must already
-    exist in the audience. Use tag_member instead for single-member tag management.
+    Only works on static segments (tags), not dynamic segments. Members must already exist in
+    the audience. Use tag_member for single-member tag management instead.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        segment_id: The static segment/tag ID (numeric string, e.g. '12345'). Must be type
-            'static'. Obtain from list_segments.
-        emails: Comma-separated email addresses to add (e.g. 'a@co.com,b@co.com'). Each email
-            must already exist in the audience.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        segment_id: Static segment/tag ID (numeric string, e.g. '12345'). Obtain from list_segments.
+        emails: Comma-separated emails to add (e.g. 'a@co.com,b@co.com'). Must exist in audience.
 
     Returns:
-        JSON with fields: total_added (int), total_removed (int, always 0 for this operation),
-        errors (array of error objects for emails that could not be added).
-
-    Example:
-        add_members_to_segment(list_id="abc123", segment_id="12345", emails="jane@co.com,john@co.com") -> {"total_added": 2, "total_removed": 0, "errors": []}
+        JSON with total_added, total_removed (always 0), errors array.
     """
     if (guard := _guard_write(action="add members to segment", list_id=list_id, segment_id=segment_id)):
         return guard
@@ -1312,26 +1338,21 @@ def add_members_to_segment(list_id: str, segment_id: str, emails: str) -> str:
 
 @mcp.tool()
 def remove_members_from_segment(list_id: str, segment_id: str, emails: str) -> str:
-    """Remove multiple members from a static segment or tag by email address.
+    """Remove members from a static segment or tag. Members remain in the audience.
 
-    Use to bulk-remove members from a static segment. Only removes the segment association;
-    members remain in the audience. Only works on static segments (tags), not dynamic (saved)
-    segments. Use tag_member with tags_to_remove for single-member removal.
+    Only works on static segments (tags), not dynamic segments. Non-existent members in the
+    email list are silently skipped. Use tag_member with tags_to_remove for single-member removal.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 error if segment_id or list_id is invalid.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        segment_id: The static segment/tag ID (numeric string, e.g. '12345'). Must be type
-            'static'. Obtain from list_segments.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        segment_id: Static segment/tag ID (numeric string, e.g. '12345'). Obtain from list_segments.
         emails: Comma-separated email addresses to remove (e.g. 'a@co.com,b@co.com').
 
     Returns:
-        JSON with fields: total_added (int, always 0 for this operation), total_removed (int),
-        errors (array of error objects).
-
-    Example:
-        remove_members_from_segment(list_id="abc123", segment_id="12345", emails="jane@co.com") -> {"total_added": 0, "total_removed": 1, "errors": []}
+        JSON with total_added (always 0), total_removed, errors array.
     """
     if (guard := _guard_write(action="remove members from segment", list_id=list_id, segment_id=segment_id)):
         return guard
@@ -1352,26 +1373,23 @@ def remove_members_from_segment(list_id: str, segment_id: str, emails: str) -> s
 def update_segment(list_id: str, segment_id: str, name: Optional[str] = None, match: Optional[str] = None, conditions_json: Optional[str] = None) -> str:
     """Update a segment's name or dynamic filter conditions.
 
-    Use to rename a segment or change its filter conditions. Only provided fields are updated.
-    Use add_members_to_segment/remove_members_from_segment to manage static segment membership.
-    Cannot change a segment from static to dynamic or vice versa.
+    Only provided fields are updated. Idempotent: re-applying the same name is safe. Cannot
+    change a segment from static to dynamic or vice versa. Use add_members_to_segment or
+    remove_members_from_segment to manage static segment membership instead.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 error if segment_id is invalid. Providing match without conditions_json is ignored.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        segment_id: The segment ID to update (numeric string, e.g. '12345'). Obtain from list_segments.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        segment_id: Segment ID to update (numeric string, e.g. '12345'). Obtain from list_segments.
         name: New display name for the segment.
-        match: Condition match type for dynamic segments. Valid values: 'all' (AND), 'any' (OR).
-            Must be provided together with conditions_json. Ignored for static segments.
-        conditions_json: JSON string of conditions array. Must be provided together with match.
-            Example: '[{"condition_type":"TextMerge","field":"merge_fields/FNAME","op":"is","value":"John"}]'
+        match: Condition match type for dynamic segments: 'all' (AND) or 'any' (OR).
+            Must be provided together with conditions_json.
+        conditions_json: JSON string of conditions array. Must be provided with match.
 
     Returns:
-        JSON with fields: id, name, member_count, type ('static' or 'saved'), options (conditions).
-
-    Example:
-        update_segment(list_id="abc123", segment_id="12345", name="Premium VIP") -> {"id": 12345, "name": "Premium VIP", "member_count": 150, ...}
+        JSON with id, name, member_count, type ('static'/'saved'), options.
     """
     if (guard := _guard_write(action="update segment", list_id=list_id, segment_id=segment_id)):
         return guard
@@ -1550,28 +1568,26 @@ def create_merge_field(list_id: str, name: str, type: str, tag: Optional[str] = 
 
 @mcp.tool()
 def update_merge_field(list_id: str, merge_id: str, name: Optional[str] = None, required: Optional[bool] = None, default_value: Optional[str] = None, choices: Optional[str] = None) -> str:
-    """Update an existing merge field's name, default value, required flag, or dropdown/radio choices.
+    """Update a merge field's name, default value, required flag, or dropdown/radio choices.
 
-    Use to rename a field, change its default, or update choices. The field type and tag cannot
-    be changed after creation. Only provided fields are updated. Use list_merge_fields to find
-    merge_id values.
+    Only provided fields are updated; omitted fields remain unchanged. Choices are replaced
+    entirely (old choices are lost). Do not use to change field type or tag (immutable after
+    creation); use delete_merge_field then create_merge_field instead.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 error if merge_id is invalid or does not exist.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        merge_id: The merge field ID to update (numeric string). Obtain from list_merge_fields.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        merge_id: Merge field ID (numeric string, e.g. '5'). Obtain from list_merge_fields.
         name: New display name for the field.
         required: Whether the field is required when subscribing.
         default_value: New default value for new subscribers.
-        choices: New comma-separated choices for 'dropdown' or 'radio' types (e.g. 'Small,Medium,Large').
-            Replaces all existing choices. Only applicable to dropdown/radio fields.
+        choices: Comma-separated choices for dropdown/radio types (e.g. 'Small,Medium,Large').
+            Replaces all existing choices. Ignored for other field types.
 
     Returns:
-        JSON with fields: merge_id, tag, name, type, required.
-
-    Example:
-        update_merge_field(list_id="abc123", merge_id="5", name="Organization") -> {"merge_id": 5, "tag": "COMPANY", "name": "Organization", "type": "text", ...}
+        JSON with merge_id, tag, name, type, required.
     """
     if (guard := _guard_write(action="update merge field", list_id=list_id, merge_id=merge_id)):
         return guard
@@ -1626,27 +1642,21 @@ def delete_merge_field(list_id: str, merge_id: str) -> str:
 
 @mcp.tool()
 def list_interest_categories(list_id: str, count: int = 50, offset: int = 0) -> str:
-    """List interest categories (groups) defined for an audience, showing titles and form types.
+    """List interest categories (group containers) for an audience, showing titles and form types.
 
-    Interest categories are containers for interest options that subscribers can select (e.g.
-    "Preferred Topics" with options "Tech", "Sports", "Music"). Use to discover category IDs,
-    then use list_interests to see options within each category. Use create_interest_category
-    to add new categories.
+    Use to discover category IDs, then list_interests for options within each. Use
+    create_interest_category to add new categories.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        count: Number of categories to return (1-1000, default 50).
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        count: Categories to return (1-1000, default 50).
         offset: Pagination offset. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and categories array. Each category: id (string, use with
-        list_interests, create_interest, delete_interest_category), title, type ('checkboxes',
-        'dropdown', 'radio', 'hidden'), list_id.
-
-    Example:
-        list_interest_categories(list_id="abc123") -> {"total_items": 2, "categories": [{"id": "abc", "title": "Topics", "type": "checkboxes", ...}]}
+        JSON with total_items and categories array. Each: id, title, type ('checkboxes'/'dropdown'/
+        'radio'/'hidden'), list_id.
     """
     data = mc_request(f"/lists/{list_id}/interest-categories", params={"count": count, "offset": offset})
     categories = []
@@ -1699,26 +1709,23 @@ def create_interest_category(list_id: str, title: str, type: str) -> str:
 
 @mcp.tool()
 def list_interests(list_id: str, category_id: str, count: int = 50, offset: int = 0) -> str:
-    """List interest options within a specific interest category, with subscriber counts per option.
+    """List interest options within a category, with subscriber counts per option.
 
-    Use after list_interest_categories to see individual options (e.g. "Tech", "Sports") within
-    a category. Interest IDs are used when setting member preferences via the API. Use
-    create_interest to add new options.
+    Use after list_interest_categories to see individual options (e.g. "Tech", "Sports").
+    Interest IDs are needed when setting member preferences via add_member/update_member. Do not
+    use to manage member preferences directly; set interests per-member via the API instead.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 error if category_id is invalid.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        category_id: The interest category ID. Obtain from list_interest_categories.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        category_id: Interest category ID. Obtain from list_interest_categories.
         count: Number of interests to return (1-1000, default 50).
         offset: Pagination offset. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and interests array. Each interest: id (string, use with
-        delete_interest), name, subscriber_count (int), display_order (int).
-
-    Example:
-        list_interests(list_id="abc123", category_id="cat456") -> {"total_items": 3, "interests": [{"id": "int789", "name": "Tech", "subscriber_count": 200, ...}]}
+        JSON with total_items and interests array. Each interest: id, name, subscriber_count, display_order.
     """
     data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests", params={"count": count, "offset": offset})
     interests = []
@@ -1826,25 +1833,20 @@ def delete_interest(list_id: str, category_id: str, interest_id: str) -> str:
 
 @mcp.tool()
 def list_webhooks(list_id: str) -> str:
-    """List all webhooks configured for an audience, showing callback URLs, subscribed events, and source filters.
+    """List webhooks configured for an audience, showing callback URLs, events, and source filters.
 
-    Use to audit existing webhook integrations or find webhook IDs before deleting via
-    delete_webhook. Webhooks send HTTP POST requests to external URLs when audience events
-    (subscribe, unsubscribe, profile update, etc.) occur. Use create_webhook to add new webhooks.
+    Use to audit integrations or find webhook IDs before deleting via delete_webhook. Do not use
+    to check webhook delivery history; Mailchimp does not expose delivery logs via the API.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
 
     Returns:
-        JSON with total_items and webhooks array. Each webhook: id (string, use with
-        delete_webhook), url (callback URL), events (object with boolean flags: subscribe,
-        unsubscribe, profile, cleaned, upemail, campaign), sources (object with boolean flags:
+        JSON with total_items and webhooks array. Each webhook: id, url, events (boolean flags:
+        subscribe, unsubscribe, profile, cleaned, upemail, campaign), sources (boolean flags:
         user, admin, api), list_id.
-
-    Example:
-        list_webhooks(list_id="abc123") -> {"total_items": 1, "webhooks": [{"id": "wh789", "url": "https://example.com/hook", "events": {"subscribe": true, ...}, ...}]}
     """
     data = mc_request(f"/lists/{list_id}/webhooks")
     webhooks = []
@@ -1861,30 +1863,24 @@ def list_webhooks(list_id: str) -> str:
 
 @mcp.tool()
 def create_webhook(list_id: str, url: str, events: Optional[str] = None, sources: Optional[str] = None) -> str:
-    """Create a webhook for an audience that sends HTTP POST requests to an external URL when member events occur.
+    """Create a webhook that sends HTTP POST notifications to an external URL on audience events.
 
-    Use to set up real-time event notifications. Side effect: Mailchimp sends a validation GET
-    request to the URL during creation; the URL must be publicly accessible and return HTTP 200.
-    If events or sources are omitted, all are enabled by default. Use list_webhooks to check
-    existing webhooks. Use delete_webhook to remove.
+    Side effect: Mailchimp sends a validation GET request during creation; the URL must be
+    publicly accessible and return HTTP 200. All events and sources enabled by default if
+    omitted. Do not use for polling or batch data retrieval; use list_audience_members or
+    campaign reports instead.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        url: Publicly accessible HTTPS URL to receive webhook POST requests. Must respond to
-            a GET validation request with HTTP 200. Example: 'https://example.com/hook'.
-        events: Comma-separated events to listen for. Valid values: 'subscribe', 'unsubscribe',
-            'profile', 'cleaned', 'upemail', 'campaign'. All enabled if omitted.
-        sources: Comma-separated sources to filter by. Valid values: 'user' (subscriber actions),
-            'admin' (Mailchimp UI actions), 'api' (API calls). All enabled if omitted.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        url: Public HTTPS URL to receive POST requests. Must return HTTP 200 on GET validation.
+        events: Comma-separated events: 'subscribe', 'unsubscribe', 'profile', 'cleaned',
+            'upemail', 'campaign'. All enabled if omitted.
+        sources: Comma-separated sources: 'user', 'admin', 'api'. All enabled if omitted.
 
     Returns:
-        JSON with fields: id (string, use with delete_webhook), url, events (object with boolean
-        flags), sources (object with boolean flags). Returns error if URL validation fails.
-
-    Example:
-        create_webhook(list_id="abc123", url="https://example.com/hook", events="subscribe,unsubscribe") -> {"id": "wh789", "url": "https://example.com/hook", "events": {"subscribe": true, "unsubscribe": true}, ...}
+        JSON with id, url, events (boolean flags), sources (boolean flags). Error if URL validation fails.
     """
     if (guard := _guard_write(action="create webhook", list_id=list_id, url=url)):
         return guard
@@ -1906,22 +1902,20 @@ def create_webhook(list_id: str, url: str, events: Optional[str] = None, sources
 
 @mcp.tool()
 def delete_webhook(list_id: str, webhook_id: str) -> str:
-    """Delete a webhook from an audience, immediately stopping event notifications to the external URL.
+    """Delete a webhook, immediately stopping event notifications to its URL.
 
-    Use to stop sending notifications. The external URL stops receiving events immediately.
-    Use list_webhooks to find webhook IDs. Use create_webhook to set up a replacement.
+    Irreversible. Do not use when you want to temporarily pause notifications; webhooks have
+    no pause mechanism. Use create_webhook to set up a replacement afterward.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). This operation is irreversible. Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 error if webhook_id or list_id is invalid.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
         webhook_id: The webhook ID to delete. Obtain from list_webhooks.
 
     Returns:
-        JSON with fields: status ("deleted"), webhook_id. Returns error if webhook does not exist.
-
-    Example:
-        delete_webhook(list_id="abc123", webhook_id="wh789") -> {"status": "deleted", "webhook_id": "wh789"}
+        JSON with status ("deleted"), webhook_id.
     """
     if (guard := _guard_write(action="delete webhook", list_id=list_id, webhook_id=webhook_id)):
         return guard
@@ -1933,27 +1927,21 @@ def delete_webhook(list_id: str, webhook_id: str) -> str:
 
 @mcp.tool()
 def get_email_activity(campaign_id: str, count: int = 20, offset: int = 0) -> str:
-    """Retrieve the full activity timeline per recipient for a sent campaign (opens, clicks, bounces with timestamps).
+    """Retrieve per-recipient activity timeline for a sent campaign (opens, clicks, bounces).
 
-    Use to see exactly what each recipient did and when. Use get_open_details if you only need
-    open data. Use get_campaign_report for aggregate totals. Use get_campaign_recipients for
-    delivery status only. Only works for sent campaigns.
+    Use get_open_details for open data only. Use get_campaign_report for aggregate totals. Use
+    get_campaign_recipients for delivery status only.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Args:
-        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
-        count: Number of recipient records to return (1-1000, default 20). Each record contains
-            all activity for one recipient.
+        campaign_id: Campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        count: Recipient records to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and emails array. Each entry: email_address and activity array
-        where each activity has action ('open', 'click', 'bounce'), timestamp (ISO 8601),
-        and url (string, present only for click actions).
-
-    Example:
-        get_email_activity(campaign_id="abc123", count=50) -> {"total_items": 5000, "emails": [{"email_address": "jane@co.com", "activity": [{"action": "open", "timestamp": "2025-06-01T10:00:00Z"}, ...]}]}
+        JSON with total_items and emails array. Each: email_address, activity array with action
+        ('open'/'click'/'bounce'), timestamp, url (clicks only).
     """
     data = mc_request(f"/reports/{campaign_id}/email-activity", params={"count": count, "offset": offset})
     emails = []
@@ -1967,25 +1955,21 @@ def get_email_activity(campaign_id: str, count: int = 20, offset: int = 0) -> st
 
 @mcp.tool()
 def get_open_details(campaign_id: str, count: int = 20, offset: int = 0) -> str:
-    """Retrieve per-recipient open data for a campaign showing who opened, when, and how many times.
+    """Retrieve per-recipient open data for a sent campaign (who opened, when, how many times).
 
-    Use to identify engaged subscribers or analyze open timing patterns. Use get_campaign_report
-    for aggregate open rates. Use get_email_activity for all activity types (opens, clicks,
-    bounces) combined. Only works for sent campaigns.
+    Use get_campaign_report for aggregate open rates. Use get_email_activity for all activity
+    types combined.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Args:
-        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
-        count: Number of records to return (1-1000, default 20).
+        campaign_id: Campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        count: Records to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and members array. Each member: email_address, opens_count (int,
-        total opens including repeats), opens (array of objects with timestamp in ISO 8601).
-
-    Example:
-        get_open_details(campaign_id="abc123", count=100) -> {"total_items": 1250, "members": [{"email_address": "jane@co.com", "opens_count": 3, "opens": [{"timestamp": "2025-06-01T10:00:00Z"}, ...]}]}
+        JSON with total_items and members array. Each: email_address, opens_count, opens array
+        with timestamps.
     """
     data = mc_request(f"/reports/{campaign_id}/open-details", params={"count": count, "offset": offset})
     members = []
@@ -2034,24 +2018,21 @@ def get_campaign_recipients(campaign_id: str, count: int = 20, offset: int = 0) 
 
 @mcp.tool()
 def get_campaign_unsubscribes(campaign_id: str, count: int = 20, offset: int = 0) -> str:
-    """Retrieve members who unsubscribed as a result of a specific sent campaign, with their reasons.
+    """Retrieve members who unsubscribed from a specific sent campaign, with reasons.
 
-    Use to analyze unsubscribe causes after a campaign. Use get_campaign_report for the aggregate
-    unsubscribe count. Only works for sent campaigns.
+    Use get_campaign_report for aggregate unsubscribe count instead.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 error if campaign_id is invalid. Returns empty array for unsent campaigns.
 
     Args:
-        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
-        count: Number of records to return (1-1000, default 20).
+        campaign_id: Campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        count: Records to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and unsubscribes array. Each entry: email_address, reason (string,
-        subscriber-provided reason or null), timestamp (ISO 8601).
-
-    Example:
-        get_campaign_unsubscribes(campaign_id="abc123") -> {"total_items": 5, "unsubscribes": [{"email_address": "jane@co.com", "reason": "No longer interested", ...}]}
+        JSON with total_items and unsubscribes array. Each: email_address, reason (string or null),
+        timestamp.
     """
     data = mc_request(f"/reports/{campaign_id}/unsubscribed", params={"count": count, "offset": offset})
     unsubs = []
@@ -2099,26 +2080,22 @@ def get_domain_performance(campaign_id: str) -> str:
 
 @mcp.tool()
 def get_ecommerce_product_activity(campaign_id: str, count: int = 20, offset: int = 0) -> str:
-    """Retrieve e-commerce product activity for a campaign showing revenue and orders attributed to each product.
+    """Retrieve e-commerce product activity for a campaign showing revenue per product.
 
-    Use to measure campaign ROI by product. Requires an active e-commerce store integration
-    (Shopify, WooCommerce, etc.); returns empty results if none is connected. Use
-    list_ecommerce_stores to verify integration status. Only works for sent campaigns.
+    Requires an active e-commerce integration; returns total_items: 0 if none is connected.
+    Use list_ecommerce_stores to verify status. Only works for sent campaigns.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 error if campaign_id is invalid.
 
     Args:
-        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
-        count: Number of products to return (1-1000, default 20).
+        campaign_id: Campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        count: Products to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and products array. Each product: title (string), sku (string),
-        image_url (string or null), total_revenue (float, in store currency), total_purchased (int).
-        Returns total_items: 0 if no e-commerce store is connected.
-
-    Example:
-        get_ecommerce_product_activity(campaign_id="abc123") -> {"total_items": 5, "products": [{"title": "Blue T-Shirt", "total_revenue": 450.00, "total_purchased": 15, ...}]}
+        JSON with total_items and products array. Each: title, sku, image_url, total_revenue
+        (float, store currency), total_purchased.
     """
     data = mc_request(f"/reports/{campaign_id}/ecommerce-product-activity", params={"count": count, "offset": offset})
     products = []
@@ -2135,26 +2112,20 @@ def get_ecommerce_product_activity(campaign_id: str, count: int = 20, offset: in
 
 @mcp.tool()
 def get_campaign_sub_reports(campaign_id: str) -> str:
-    """Retrieve child report data for A/B test variants, variate campaigns, or RSS-driven campaign items.
+    """Retrieve child report data for A/B test, variate, or RSS campaign sub-items.
 
-    Use only for campaigns with sub-reports: A/B tests (per-variant performance), variate
-    campaigns (per-combination results), or RSS campaigns (per-item send stats). Returns empty
-    or minimal data for regular campaigns; use get_campaign_report instead. Use
-    get_campaign_details first to check campaign type ('absplit', 'variate', 'rss').
+    Read-only, no side effects. Returns empty data for regular campaigns; use get_campaign_report
+    instead. Check campaign type with get_campaign_details first ('absplit', 'variate', 'rss').
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Safe to retry.
 
     Args:
-        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Should be type 'absplit',
-            'variate', or 'rss' for meaningful results. Obtain from list_campaigns.
+        campaign_id: Campaign ID (e.g. 'abc123def4'). Should be type 'absplit', 'variate', or
+            'rss'. Obtain from list_campaigns.
 
     Returns:
-        JSON with sub-reports data. Format varies by campaign type: A/B tests include per-variant
-        opens, clicks, and winner data; RSS campaigns include per-item send stats with dates.
-        Returns minimal/empty data for regular campaigns.
-
-    Example:
-        get_campaign_sub_reports(campaign_id="abc123") -> {"sub_reports": [{"id": "variant_a", "opens": 150, "clicks": 30, ...}]}
+        JSON with sub-reports. Format varies: A/B tests include per-variant opens, clicks, winner;
+        RSS includes per-item send stats with dates.
     """
     data = mc_request(f"/reports/{campaign_id}/sub-reports")
     return json.dumps(data, indent=2)
@@ -2164,25 +2135,22 @@ def get_campaign_sub_reports(campaign_id: str) -> str:
 
 @mcp.tool()
 def get_member_activity(list_id: str, email_address: str, count: int = 20) -> str:
-    """Retrieve the email interaction history of a specific member (opens, clicks, bounces across all campaigns).
+    """Retrieve a member's email interaction history (opens, clicks, bounces across all campaigns).
 
-    Use to see a single member's engagement over time. Shows email-related actions only. Use
-    get_member_events for custom API-triggered events. Use get_member_tags for tag assignments.
-    Use search_members first if you need to find which audience a member belongs to.
+    Shows email actions only. Use get_member_events for custom API-triggered events. Use
+    get_member_tags for tag data. Use search_members first to find which audience a member belongs to.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 error if the member does not exist in the audience.
 
     Args:
-        list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
-        email_address: Email address of the member. Must exist in the audience.
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        email_address: Email of the member. Must exist in the audience.
         count: Number of activity records to return (1-1000, default 20).
 
     Returns:
-        JSON with email_address and activity array. Each activity: action ('open', 'click',
-        'bounce'), timestamp (ISO 8601), campaign_id (string), title (campaign title string).
-
-    Example:
-        get_member_activity(list_id="abc123", email_address="jane@co.com") -> {"email_address": "jane@co.com", "activity": [{"action": "open", "timestamp": "2025-06-01T10:00:00Z", "campaign_id": "abc123", ...}]}
+        JSON with email_address and activity array. Each: action ('open'/'click'/'bounce'),
+        timestamp, campaign_id, title.
     """
     subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/activity", params={"count": count})
@@ -2268,25 +2236,19 @@ def get_member_events(list_id: str, email_address: str, count: int = 20) -> str:
 
 @mcp.tool()
 def get_automation_emails(automation_id: str) -> str:
-    """List all individual emails within an automation workflow showing sequence, subject lines, delays, and send counts.
+    """List individual emails within an automation workflow with sequence, delays, and send counts.
 
-    Use to inspect what emails an automation sends and in what order. Do not confuse with
-    get_email_activity, which is for regular campaign engagement. Use list_automations to find
-    automation IDs. Use get_automation_email_queue to see queued subscribers for a specific email.
+    Returns all emails regardless of status. Do not confuse with get_email_activity (campaign
+    engagement). Use get_automation_email_queue to see queued subscribers for a specific email.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Args:
-        automation_id: The automation workflow ID (e.g. 'auto123'). Obtain from list_automations.
+        automation_id: Automation workflow ID (e.g. 'auto123'). Obtain from list_automations.
 
     Returns:
-        JSON with total_items and emails array. Each email: id (string, use with
-        get_automation_email_queue), position (int, sequence order starting at 1), status
-        ('sending', 'paused', 'draft'), subject_line, title, emails_sent (int), send_time
-        (ISO 8601), delay (object with amount and type, e.g. {"amount": 1, "type": "day"}).
-
-    Example:
-        get_automation_emails(automation_id="auto123") -> {"total_items": 3, "emails": [{"id": "email1", "position": 1, "subject_line": "Welcome!", "emails_sent": 500, ...}]}
+        JSON with total_items and emails array. Each email: id, position (sequence starting at 1),
+        status ('sending'/'paused'/'draft'), subject_line, title, emails_sent, send_time, delay.
     """
     data = mc_request(f"/automations/{automation_id}/emails")
     emails = []
@@ -2336,23 +2298,18 @@ def get_automation_email_queue(automation_id: str, email_id: str) -> str:
 
 @mcp.tool()
 def pause_automation(automation_id: str) -> str:
-    """Pause all emails in an automation workflow, stopping delivery while preserving the queue.
+    """Pause an automation workflow, stopping delivery while preserving the queue.
 
-    Use to temporarily stop an automation. Queued subscribers are preserved and will resume
-    receiving emails when restarted via start_automation. New subscribers still enter the queue
-    but do not receive emails while paused. Reversible.
+    Queued subscribers resume when restarted via start_automation. New subscribers still enter
+    the queue but do not receive emails while paused. Reversible.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
 
     Args:
-        automation_id: The automation workflow ID (e.g. 'auto123'). Obtain from list_automations.
+        automation_id: Automation workflow ID (e.g. 'auto123'). Obtain from list_automations.
 
     Returns:
-        JSON with fields: status ("paused"), automation_id. Returns error if automation is
-        already paused or in draft status.
-
-    Example:
-        pause_automation(automation_id="auto123") -> {"status": "paused", "automation_id": "auto123"}
+        JSON with status ("paused"), automation_id. Error if already paused or in draft status.
     """
     if (guard := _guard_write(action="pause automation", automation_id=automation_id)):
         return guard
@@ -2389,26 +2346,20 @@ def start_automation(automation_id: str) -> str:
 
 @mcp.tool()
 def list_landing_pages(count: int = 20, offset: int = 0) -> str:
-    """List all landing pages in the account with publication status, URLs, and associated audiences.
+    """List landing pages with publication status, URLs, and associated audiences.
 
-    Use to browse landing pages, find published URLs, or check status. Landing pages are
-    standalone web pages for lead capture or promotions, not emails. Use get_landing_page for
-    full details of a specific page. Do not confuse with list_campaigns (email campaigns).
+    Landing pages are standalone web pages, not emails. Use get_landing_page for full details.
+    Do not use to find email campaigns; use list_campaigns instead.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Args:
-        count: Number of landing pages to return (1-1000, default 20).
+        count: Landing pages to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and landing_pages array. Each page: id (string, use with
-        get_landing_page), name, title, status ('published', 'unpublished', 'draft'), url
-        (public URL when published, null otherwise), published_at (ISO 8601 or null),
-        created_at (ISO 8601), list_id (associated audience).
-
-    Example:
-        list_landing_pages() -> {"total_items": 3, "landing_pages": [{"name": "Spring Sale", "status": "published", "url": "https://mailchi.mp/abc123/spring-sale", ...}]}
+        JSON with total_items and landing_pages array. Each: id, name, title, status
+        ('published'/'unpublished'/'draft'), url (null if not published), published_at, created_at, list_id.
     """
     data = mc_request("/landing-pages", params={"count": count, "offset": offset})
     pages = []
@@ -2428,24 +2379,19 @@ def list_landing_pages(count: int = 20, offset: int = 0) -> str:
 
 @mcp.tool()
 def get_landing_page(page_id: str) -> str:
-    """Retrieve full details of a specific landing page including description, tracking settings, and timestamps.
+    """Retrieve full details of a landing page including description and tracking settings.
 
-    Use when you have a page_id and need complete information. Use list_landing_pages to browse
-    all pages and discover page IDs.
+    Use list_landing_pages to browse all pages and discover page IDs.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 error if page_id is invalid.
 
     Args:
-        page_id: The landing page ID. Obtain from list_landing_pages.
+        page_id: Landing page ID (alphanumeric string). Obtain from list_landing_pages.
 
     Returns:
-        JSON with fields: id, name, title, description (string), status ('published',
-        'unpublished', 'draft'), url (public URL or null), published_at (ISO 8601 or null),
-        created_at (ISO 8601), updated_at (ISO 8601), list_id, tracking (object with
-        analytics settings).
-
-    Example:
-        get_landing_page(page_id="page123") -> {"id": "page123", "name": "Spring Sale", "status": "published", "url": "https://mailchi.mp/abc123/spring-sale", ...}
+        JSON with id, name, title, description, status ('published'/'unpublished'/'draft'), url,
+        published_at, created_at, updated_at, list_id, tracking.
     """
     data = mc_request(f"/landing-pages/{page_id}")
     return json.dumps({
@@ -2467,23 +2413,17 @@ def get_landing_page(page_id: str) -> str:
 
 @mcp.tool()
 def list_ecommerce_stores() -> str:
-    """List all connected e-commerce stores (Shopify, WooCommerce, etc.) with platform and currency info.
+    """List connected e-commerce stores (Shopify, WooCommerce, etc.) with platform and currency info.
 
-    Use to discover store IDs before querying orders (list_store_orders), products
-    (list_store_products), or customers (list_store_customers). Also use to verify e-commerce
-    integration status before calling get_ecommerce_product_activity. Returns total_items: 0
+    Use to discover store IDs for list_store_orders, list_store_products, list_store_customers.
+    Also verifies integration status before get_ecommerce_product_activity. Returns total_items: 0
     if no integration is configured.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Returns:
-        JSON with total_items and stores array. Each store: id (string, use as store_id in
-        other e-commerce tools), list_id (associated audience), name, platform ('shopify',
-        'woocommerce', 'bigcommerce', etc.), domain, currency_code (ISO 4217, e.g. 'USD'),
-        money_format (display format string), created_at (ISO 8601).
-
-    Example:
-        list_ecommerce_stores() -> {"total_items": 1, "stores": [{"id": "store123", "name": "My Shop", "platform": "shopify", "currency_code": "USD", ...}]}
+        JSON with total_items and stores array. Each: id (use as store_id), list_id, name,
+        platform, domain, currency_code (ISO 4217), money_format, created_at.
     """
     data = mc_request("/ecommerce/stores")
     stores = []
@@ -2503,27 +2443,21 @@ def list_ecommerce_stores() -> str:
 
 @mcp.tool()
 def list_store_orders(store_id: str, count: int = 20, offset: int = 0) -> str:
-    """List orders from a connected e-commerce store with customer info, totals, and fulfillment status.
+    """List orders from a connected e-commerce store with totals and fulfillment status.
 
-    Use to browse orders synced from your e-commerce platform. Requires an active integration;
-    use list_ecommerce_stores to find store IDs and verify connectivity. Use
-    list_store_customers for customer-level aggregates instead of per-order data.
+    Requires an active integration. Use list_store_customers for customer-level aggregates instead.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Args:
-        store_id: The e-commerce store ID. Obtain from list_ecommerce_stores.
-        count: Number of orders to return (1-1000, default 20).
+        store_id: E-commerce store ID (alphanumeric string). Obtain from list_ecommerce_stores.
+        count: Orders to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and orders array. Each order: id (string), customer (email address
-        string), order_total (float, in store currency), currency_code (ISO 4217),
-        financial_status ('paid', 'pending', 'refunded', etc.), fulfillment_status ('fulfilled',
-        'partial', null), processed_at_foreign (ISO 8601), lines_count (int, number of line items).
-
-    Example:
-        list_store_orders(store_id="store123", count=50) -> {"total_items": 200, "orders": [{"id": "ord_123", "customer": "jane@co.com", "order_total": 59.99, ...}]}
+        JSON with total_items and orders array. Each: id, customer (email), order_total (float),
+        currency_code (ISO 4217), financial_status, fulfillment_status, processed_at_foreign,
+        lines_count.
     """
     data = mc_request(f"/ecommerce/stores/{store_id}/orders", params={"count": count, "offset": offset})
     orders = []
@@ -2623,22 +2557,18 @@ def list_store_customers(store_id: str, count: int = 20, offset: int = 0) -> str
 def list_campaign_folders(count: int = 50, offset: int = 0) -> str:
     """List campaign folders used to organize campaigns in the Mailchimp dashboard.
 
-    Use to see how campaigns are organized. Folders are organizational containers only; they
-    do not affect campaign behavior. Do not confuse with list_campaigns (which lists campaigns
-    themselves).
+    Folders are organizational containers only; they do not affect campaign delivery or behavior.
+    Returns an empty array if no folders exist. Do not use to find campaigns; use list_campaigns
+    or search_campaigns instead.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Args:
         count: Number of folders to return (1-1000, default 50).
         offset: Pagination offset. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and folders array. Each folder: id (string), name (string),
-        count (int, number of campaigns in the folder).
-
-    Example:
-        list_campaign_folders() -> {"total_items": 3, "folders": [{"id": "folder123", "name": "Q1 2025", "count": 12}]}
+        JSON with total_items and folders array. Each folder: id, name, count (campaigns in folder).
     """
     data = mc_request("/campaign-folders", params={"count": count, "offset": offset})
     folders = []
@@ -2655,28 +2585,20 @@ def list_campaign_folders(count: int = 50, offset: int = 0) -> str:
 
 @mcp.tool()
 def create_batch(operations: str) -> str:
-    """Submit multiple API operations as a single asynchronous batch request for bulk processing.
+    """Submit multiple API operations as a single asynchronous batch request.
 
-    Use for bulk operations exceeding other tool limits (e.g. batch_subscribe handles up to 500;
-    use this for larger imports). Operations run asynchronously in the background. Use
-    get_batch_status to poll for completion. Each operation runs independently; failures in one
-    do not affect others. Can include destructive operations (DELETE, POST).
+    Use for bulk operations exceeding other tool limits (e.g. batch_subscribe max 500). Operations
+    run asynchronously; poll with get_batch_status. Each operation runs independently. Can include
+    destructive operations (DELETE, POST).
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
 
     Args:
-        operations: JSON string of operations array. Each operation requires: method (string,
-            HTTP verb: 'GET', 'POST', 'PATCH', 'PUT', 'DELETE'), path (string, API endpoint
-            without base URL, e.g. '/lists/abc123/members'), and optionally body (JSON string
-            for POST/PATCH/PUT).
-            Example: '[{"method":"POST","path":"/lists/abc123/members/hash/tags","body":"{\"tags\":[{\"name\":\"VIP\",\"status\":\"active\"}]}"}]'
+        operations: JSON array of operations. Each requires: method ('GET'/'POST'/'PATCH'/'PUT'/
+            'DELETE'), path (API endpoint, e.g. '/lists/abc123/members'), optional body (JSON string).
 
     Returns:
-        JSON with fields: id (string, batch ID for use with get_batch_status), status ('pending'),
-        total_operations (int), submitted_at (ISO 8601).
-
-    Example:
-        create_batch(operations='[{"method":"GET","path":"/lists"}]') -> {"id": "batch123", "status": "pending", "total_operations": 1, ...}
+        JSON with id (batch ID for get_batch_status), status ('pending'), total_operations, submitted_at.
     """
     if (guard := _guard_write(action="run batch operations")):
         return guard
@@ -2727,24 +2649,19 @@ def get_batch_status(batch_id: str) -> str:
 
 @mcp.tool()
 def list_batches(count: int = 20, offset: int = 0) -> str:
-    """List recent batch operations with their status and progress.
+    """List recent batch operations with status and progress.
 
-    Use to find batch IDs or monitor multiple ongoing batches. Use get_batch_status for detailed
-    progress on a specific batch.
+    Use get_batch_status for detailed progress on a specific batch.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Args:
-        count: Number of batch operations to return (1-1000, default 20).
+        count: Batch operations to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and batches array. Each batch: id (string), status ('pending',
-        'started', 'finished'), total_operations (int), finished_operations (int),
-        errored_operations (int), submitted_at (ISO 8601), completed_at (ISO 8601 or null).
-
-    Example:
-        list_batches(count=10) -> {"total_items": 5, "batches": [{"id": "batch123", "status": "finished", "total_operations": 100, ...}]}
+        JSON with total_items and batches array. Each: id, status ('pending'/'started'/'finished'),
+        total_operations, finished_operations, errored_operations, submitted_at, completed_at.
     """
     data = mc_request("/batches", params={"count": count, "offset": offset})
     batches = []
@@ -2765,20 +2682,15 @@ def list_batches(count: int = 20, offset: int = 0) -> str:
 
 @mcp.tool()
 def ping() -> str:
-    """Check API connectivity and verify that the Mailchimp API key is valid.
+    """Check API connectivity and verify the API key is valid.
 
-    Use as a health check before running other operations. Fastest way to verify the API key is
-    correctly configured. Do not use get_account_info for health checks; this is lighter and
-    purpose-built. Returns error if the key is invalid or missing.
+    Fastest health check available. Use get_account_info instead if you need account details.
+    Returns error object if the key is invalid or missing.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Returns:
-        JSON with fields: health_check (string, 'ok' if connected), status_code (int, 200 if
-        healthy). Returns error object if the API key is invalid.
-
-    Example:
-        ping() -> {"health_check": "ok", "status_code": 200}
+        JSON with health_check ('ok' if connected), status_code (200 if healthy).
     """
     data = mc_request("/ping")
     return json.dumps({
@@ -2791,24 +2703,20 @@ def ping() -> str:
 def search_campaigns(query: str, count: int = 20, offset: int = 0) -> str:
     """Search campaigns by keyword across titles, subject lines, and list names.
 
-    Use to find campaigns by keyword when you do not know the campaign ID. Use list_campaigns
-    instead to browse all campaigns by status or date. Use get_campaign_details for full settings
-    once you have the ID.
+    Use to find campaigns when you do not know the ID. Use list_campaigns to browse by status
+    or date instead. Queries under 3 characters return an error.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
     Args:
-        query: Search query string. Matches against campaign titles, subject lines, and list
-            names (e.g. 'spring sale', 'newsletter'). Minimum 3 characters.
+        query: Search string (minimum 3 characters). Matches against campaign titles, subject
+            lines, and list names.
         count: Number of results to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and results array. Each result contains a campaign object with:
-        id, type, status, title, subject_line, send_time (ISO 8601 or null), emails_sent (int).
-
-    Example:
-        search_campaigns(query="spring sale") -> {"total_items": 3, "results": [{"campaign": {"id": "abc123", "title": "Spring Sale 2025", "status": "sent", ...}}]}
+        JSON with total_items and results array. Each result: campaign object with id, type,
+        status, title, subject_line, send_time, emails_sent.
     """
     data = mc_request("/search-campaigns", params={"query": query, "count": count, "offset": offset})
     results = []
@@ -2830,24 +2738,22 @@ def search_campaigns(query: str, count: int = 20, offset: int = 0) -> str:
 
 @mcp.tool()
 def resend_to_non_openers(campaign_id: str) -> str:
-    """Create a new draft campaign targeting only recipients who did not open the original sent campaign.
+    """Create a new draft campaign targeting only recipients who did not open the original.
 
-    Use to resend a campaign to non-openers with a potentially different subject line. The
-    original must be a sent campaign. Creates a new campaign in 'save' (draft) status. Use
-    update_campaign to change the subject line, then send_campaign or schedule_campaign to deliver.
+    The new campaign inherits content and settings from the original. Not idempotent: calling
+    twice creates two separate drafts. Workflow: resend_to_non_openers -> update_campaign
+    (change subject) -> send_campaign or schedule_campaign. Do not use for A/B test campaigns
+    or campaigns sent less than 24 hours ago (open tracking may be incomplete).
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns error if the original campaign status is not 'sent'.
 
     Args:
-        campaign_id: The ID of the original sent campaign (e.g. 'abc123def4'). Must have
-            status 'sent'. Obtain from list_campaigns(status='sent').
+        campaign_id: ID of the original sent campaign (e.g. 'abc123def4'). Obtain from
+            list_campaigns(status='sent').
 
     Returns:
-        JSON with fields: id (string, the NEW campaign's ID), status ('save'), title (string),
-        web_id (int). Returns error if original campaign was not sent.
-
-    Example:
-        resend_to_non_openers(campaign_id="abc123") -> {"id": "def456", "status": "save", "title": "Spring Sale (Resend)", "web_id": 789012}
+        JSON with id (new campaign ID), status ('save'), title, web_id.
     """
     if (guard := _guard_write(action="resend to non-openers", campaign_id=campaign_id)):
         return guard
@@ -2864,28 +2770,21 @@ def resend_to_non_openers(campaign_id: str) -> str:
 def trigger_customer_journey(journey_id: str, step_id: str, email_address: str) -> str:
     """Trigger a contact into a specific step of a Customer Journey workflow.
 
-    Use to programmatically enroll a contact at a specific entry point in a Customer Journey
-    (the successor to Classic Automations, with branching logic). The contact must already exist
-    as a subscribed member in the journey's audience. Side effect: the contact begins receiving
-    journey emails immediately. Journey and step IDs must be obtained from the Mailchimp web UI
-    or the automations API.
+    Side effect: the contact begins receiving journey emails immediately. The contact must be
+    a subscribed member of the journey's audience. Use list_automations to find journey IDs.
+    For Classic Automations, use start_automation instead. For one-time emails, use
+    send_campaign or create_campaign instead.
 
-    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns error if contact is not subscribed or step is not a valid API-trigger entry point.
 
     Args:
-        journey_id: The Customer Journey ID (e.g. 'journey123'). Found in the Mailchimp web UI
-            URL or via list_automations.
-        step_id: The specific step ID to trigger the contact into. Must be an API-trigger entry
-            point step configured in the journey.
-        email_address: Email address of the contact to enroll. Must be a subscribed member of
-            the journey's audience.
+        journey_id: Customer Journey ID. Found in the Mailchimp web UI or via list_automations.
+        step_id: Step ID to trigger into. Must be an API-trigger entry point.
+        email_address: Email of the contact. Must be subscribed in the journey's audience.
 
     Returns:
-        JSON with fields: status ('triggered'), journey_id, step_id, email_address. Returns
-        error if the contact is not subscribed or the step is not a valid trigger point.
-
-    Example:
-        trigger_customer_journey(journey_id="j123", step_id="s456", email_address="jane@co.com") -> {"status": "triggered", "journey_id": "j123", "step_id": "s456", "email_address": "jane@co.com"}
+        JSON with status ('triggered'), journey_id, step_id, email_address.
     """
     if (guard := _guard_write(action="trigger customer journey", journey_id=journey_id, step_id=step_id, email_address=email_address)):
         return guard
