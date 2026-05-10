@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Syntax check
+        run: uv run python -c "import ast; ast.parse(open('src/mailchimp_mcp_server/server.py').read()); print('Syntax OK')"
+
+      - name: Import check
+        run: uv run python -c "from mailchimp_mcp_server.server import mcp; print(f'Server loaded: {len(mcp._tool_manager._tools)} tools')"
