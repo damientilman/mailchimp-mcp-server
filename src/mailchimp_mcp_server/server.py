@@ -88,22 +88,26 @@ def get_account_info() -> str:
 
 @mcp.tool()
 def list_audiences(count: int = 10, offset: int = 0) -> str:
-    """List all audiences (also called lists) in the Mailchimp account with key stats.
+    """List all audiences (also called lists) in the Mailchimp account with subscriber counts and engagement rates.
 
-    Use this tool to discover available audiences and their IDs before working with members,
-    segments, or campaigns. Use get_audience_details for full details on a single audience.
-    Most Mailchimp accounts have 1-5 audiences. Read-only. Does not modify data.
+    Use this tool as the first step in most workflows to discover audience IDs. Almost every
+    other tool requires a list_id, which you get from this tool's output. Use get_audience_details
+    instead when you already have a list_id and need full stats or the subscribe URL. Do not use
+    this tool to find a specific member; use search_members for that. Most Mailchimp accounts
+    have 1-5 audiences. Read-only. Does not modify data.
 
     Args:
-        count: Number of audiences to return (max 1000, default 10).
-        offset: Pagination offset for retrieving additional pages.
+        count: Number of audiences to return (1-1000, default 10). Most accounts have fewer
+            than 10 audiences.
+        offset: Pagination offset for retrieving additional pages. Use when total_items exceeds count.
 
     Returns:
-        JSON with total_items and audiences array (id, name, member_count, unsubscribe_count,
-        open_rate, click_rate, date_created).
+        JSON with total_items and audiences array. Each audience includes: id (use this as
+        list_id in other tools), name, member_count, unsubscribe_count, open_rate (decimal 0-1),
+        click_rate (decimal 0-1), date_created (ISO 8601).
 
     Example:
-        list_audiences(count=5) -> {"total_items": 2, "audiences": [{"id": "abc123", "name": "Newsletter", ...}]}
+        list_audiences(count=5) -> {"total_items": 2, "audiences": [{"id": "abc123", "name": "Newsletter", "member_count": 5000, ...}]}
     """
     data = mc_request("/lists", params={"count": count, "offset": offset})
     audiences = []
@@ -954,20 +958,25 @@ def unschedule_campaign(campaign_id: str) -> str:
 
 @mcp.tool()
 def replicate_campaign(campaign_id: str) -> str:
-    """Duplicate an existing campaign, creating a new draft with the same settings and content.
+    """Duplicate an existing campaign, creating a new draft copy with the same settings, recipients, and content.
 
-    Use this tool to clone a campaign as a starting point for a new send. The new campaign
-    is created in 'save' (draft) status and can be modified before sending. Works on campaigns
-    of any status. Respects read-only and dry-run modes.
+    Use this tool to clone a successful campaign as a starting point for a new send, avoiding
+    the need to recreate settings manually. The new campaign is created in 'save' (draft) status
+    and can be modified via update_campaign or set_campaign_content before sending. Works on
+    campaigns of any status (draft, scheduled, or sent). Use create_campaign instead to build
+    a campaign from scratch. This is a write operation that creates a new campaign. Respects
+    read-only and dry-run modes.
 
     Args:
-        campaign_id: The campaign ID to replicate (e.g. 'abc123def4').
+        campaign_id: The campaign ID to replicate (e.g. 'abc123def4'). Use list_campaigns
+            to find IDs.
 
     Returns:
-        JSON with fields: id (the new campaign ID), status, title, web_id.
+        JSON with fields: id (the new campaign's ID, different from the original), status
+        ('save'), title, web_id (for opening in Mailchimp's web UI).
 
     Example:
-        replicate_campaign(campaign_id="abc123") -> {"id": "def456", "status": "save", ...}
+        replicate_campaign(campaign_id="abc123") -> {"id": "def456", "status": "save", "title": "Spring Sale (copy)", ...}
     """
     if (guard := _guard_write(action="replicate campaign", campaign_id=campaign_id)):
         return guard
@@ -1749,23 +1758,29 @@ def delete_webhook(list_id: str, webhook_id: str) -> str:
 
 @mcp.tool()
 def get_email_activity(campaign_id: str, count: int = 20, offset: int = 0) -> str:
-    """Get per-recipient email activity for a campaign showing individual opens, clicks, and bounces.
+    """Get the full activity timeline for each recipient of a campaign, showing every open, click, and bounce event.
 
-    Use this tool to see exactly what each recipient did (opened, clicked, bounced). Use
-    get_open_details for open-specific data with timestamps, or get_campaign_report for
-    aggregate metrics. Supports pagination for campaigns with many recipients. Read-only.
-    Does not modify data.
+    Use this tool to see exactly what each recipient did and when. Each recipient's activity
+    is a chronological list of actions (open, click, bounce). Use get_open_details instead if
+    you only need open data. Use get_campaign_report instead for aggregate totals (total opens,
+    clicks, bounces across all recipients). Use get_campaign_recipients instead if you only
+    need delivery status without detailed activity. Only available for sent campaigns.
+    Read-only. Does not modify data.
 
     Args:
-        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4').
-        count: Number of members to return (max 1000, default 20).
-        offset: Pagination offset for retrieving additional pages.
+        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        count: Number of recipient records to return (1-1000, default 20). Each record
+            contains all activity for one recipient.
+        offset: Pagination offset for retrieving additional pages. Use when total_items
+            exceeds count.
 
     Returns:
-        JSON with total_items and emails array (email_address, activity array with action/timestamp).
+        JSON with total_items and emails array. Each entry includes: email_address and
+        activity array where each activity has action ('open', 'click', 'bounce'),
+        timestamp (ISO 8601), and url (for click actions).
 
     Example:
-        get_email_activity(campaign_id="abc123", count=50)
+        get_email_activity(campaign_id="abc123", count=50) -> {"total_items": 5000, "emails": [{"email_address": "jane@co.com", "activity": [{"action": "open", "timestamp": "2025-06-01T10:00:00Z"}, ...]}]}
     """
     data = mc_request(f"/reports/{campaign_id}/email-activity", params={"count": count, "offset": offset})
     emails = []
@@ -1810,22 +1825,28 @@ def get_open_details(campaign_id: str, count: int = 20, offset: int = 0) -> str:
 
 @mcp.tool()
 def get_campaign_recipients(campaign_id: str, count: int = 20, offset: int = 0) -> str:
-    """Get the list of recipients for a sent campaign with delivery status and open counts.
+    """Get the delivery roster for a sent campaign showing each recipient's delivery status and open count.
 
-    Use this tool to verify who received a campaign and whether they opened it. Use
-    get_email_activity for detailed per-recipient actions (clicks, bounces), or
-    get_campaign_report for aggregate metrics. Read-only. Does not modify data.
+    Use this tool to verify exactly who received a campaign and whether they opened it. Only
+    available for campaigns that have been sent. Use get_email_activity instead for detailed
+    per-recipient actions (clicks, bounces, opens with timestamps). Use get_campaign_report
+    instead for aggregate metrics (total opens, clicks, bounces). Do not use this for draft
+    or scheduled campaigns; they have no recipients yet. Read-only. Does not modify data.
 
     Args:
-        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4').
-        count: Number of recipients to return (max 1000, default 20).
-        offset: Pagination offset for retrieving additional pages.
+        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        count: Number of recipients to return (1-1000, default 20). Use with offset to
+            paginate through large audiences.
+        offset: Pagination offset for retrieving additional pages. Use when total_items
+            exceeds count.
 
     Returns:
-        JSON with total_items and recipients array (email_address, status, open_count, last_open).
+        JSON with total_items (total recipients) and recipients array. Each recipient
+        includes: email_address, status ('sent', 'hard' bounce, 'soft' bounce),
+        open_count (number of times opened), last_open (ISO 8601 timestamp or null).
 
     Example:
-        get_campaign_recipients(campaign_id="abc123", count=100)
+        get_campaign_recipients(campaign_id="abc123", count=100) -> {"total_items": 5000, "recipients": [{"email_address": "jane@co.com", "status": "sent", "open_count": 3, ...}]}
     """
     data = mc_request(f"/reports/{campaign_id}/sent-to", params={"count": count, "offset": offset})
     recipients = []
@@ -1934,20 +1955,25 @@ def get_ecommerce_product_activity(campaign_id: str, count: int = 20, offset: in
 
 @mcp.tool()
 def get_campaign_sub_reports(campaign_id: str) -> str:
-    """Get sub-reports for a campaign, such as A/B test variant results or RSS item reports.
+    """Get child report data for A/B test variants, variate campaigns, or RSS-driven campaign items.
 
-    Use this tool for campaigns that have child reports (A/B tests, variate campaigns, RSS-driven
-    campaigns). Returns the raw sub-report data. For standard single-send campaigns, this
-    will return an empty or minimal response. Read-only. Does not modify data.
+    Use this tool only for campaigns that have sub-reports: A/B tests (shows per-variant
+    performance), variate campaigns (shows each combination's results), or RSS campaigns
+    (shows per-item send data). For standard single-send regular campaigns, this returns
+    empty results; use get_campaign_report instead for those. Use get_campaign_details first
+    to check the campaign type before calling this. Read-only. Does not modify data.
 
     Args:
-        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4').
+        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Should be an A/B test,
+            variate, or RSS campaign for meaningful results.
 
     Returns:
-        JSON with the full sub-reports data structure (varies by campaign type).
+        JSON with the sub-reports data structure. Format varies by campaign type: A/B tests
+        include per-variant opens/clicks/winner data; RSS campaigns include per-item
+        send stats. Returns empty or minimal data for regular campaigns.
 
     Example:
-        get_campaign_sub_reports(campaign_id="abc123")
+        get_campaign_sub_reports(campaign_id="abc123") -> {"sub_reports": [{"id": "variant_a", "opens": 150, "clicks": 30, ...}]}
     """
     data = mc_request(f"/reports/{campaign_id}/sub-reports")
     return json.dumps(data, indent=2)
@@ -2052,21 +2078,27 @@ def get_member_events(list_id: str, email_address: str, count: int = 20) -> str:
 
 @mcp.tool()
 def get_automation_emails(automation_id: str) -> str:
-    """List all individual emails within an automation workflow, with their settings and send counts.
+    """List all individual emails within an automation workflow, showing the sequence, subject lines, delays, and send counts.
 
-    Use this tool to see the sequence of emails in a workflow, including subject lines, delays,
-    and how many have been sent. Use get_automation_email_queue to see subscribers queued for
-    a specific email. Read-only. Does not modify data.
+    Use this tool to inspect what emails an automation sends and in what order. Each automation
+    workflow contains one or more emails sent in sequence with configurable delays between them.
+    Use list_automations first to find automation IDs. Use get_automation_email_queue to see
+    which subscribers are queued for a specific email within the workflow. Do not confuse with
+    get_email_activity, which shows per-recipient engagement for regular campaigns, not
+    automations. Read-only. Does not modify data.
 
     Args:
-        automation_id: The automation workflow ID (e.g. 'auto123'). Use list_automations to find IDs.
+        automation_id: The automation workflow ID (e.g. 'auto123'). Use list_automations
+            to find IDs.
 
     Returns:
-        JSON with total_items and emails array (id, position, status, subject_line, title,
-        emails_sent, send_time, delay).
+        JSON with total_items and emails array. Each email includes: id (use with
+        get_automation_email_queue), position (order in sequence, starting at 1), status
+        ('sending', 'paused', 'draft'), subject_line, title, emails_sent (total delivered),
+        send_time, delay (time between trigger and send).
 
     Example:
-        get_automation_emails(automation_id="auto123")
+        get_automation_emails(automation_id="auto123") -> {"total_items": 3, "emails": [{"id": "email1", "position": 1, "subject_line": "Welcome!", ...}]}
     """
     data = mc_request(f"/automations/{automation_id}/emails")
     emails = []
@@ -2165,21 +2197,27 @@ def start_automation(automation_id: str) -> str:
 
 @mcp.tool()
 def list_landing_pages(count: int = 20, offset: int = 0) -> str:
-    """List all landing pages in the account with their status and URLs.
+    """List all landing pages in the account with their publication status, URLs, and associated audiences.
 
-    Use this tool to browse landing pages and find their IDs or published URLs.
-    Use get_landing_page for full details on a specific page. Read-only. Does not modify data.
+    Use this tool to browse landing pages created in Mailchimp, find their published URLs,
+    or check their status. Landing pages are standalone web pages used for lead capture,
+    promotions, or sign-ups. Use get_landing_page instead when you already have a page_id
+    and need full details including description and tracking settings. Do not confuse with
+    list_campaigns; landing pages are web pages, not emails. Read-only. Does not modify data.
 
     Args:
-        count: Number of landing pages to return (max 1000, default 20).
-        offset: Pagination offset for retrieving additional pages.
+        count: Number of landing pages to return (1-1000, default 20).
+        offset: Pagination offset for retrieving additional pages. Use when total_items
+            exceeds count.
 
     Returns:
-        JSON with total_items and landing_pages array (id, name, title, status, url,
-        published_at, created_at, list_id).
+        JSON with total_items and landing_pages array. Each page includes: id (use with
+        get_landing_page), name, title, status ('published', 'unpublished', 'draft'),
+        url (public URL when published), published_at (ISO 8601), created_at (ISO 8601),
+        list_id (associated audience).
 
     Example:
-        list_landing_pages() -> {"total_items": 3, "landing_pages": [{"name": "Spring Sale", "status": "published", ...}]}
+        list_landing_pages() -> {"total_items": 3, "landing_pages": [{"name": "Spring Sale", "status": "published", "url": "https://...", ...}]}
     """
     data = mc_request("/landing-pages", params={"count": count, "offset": offset})
     pages = []
@@ -2305,20 +2343,25 @@ def list_store_orders(store_id: str, count: int = 20, offset: int = 0) -> str:
 def list_store_products(store_id: str, count: int = 20, offset: int = 0) -> str:
     """List products from a connected e-commerce store with titles, URLs, and variant counts.
 
-    Use this tool to browse the product catalog synced to Mailchimp. Requires an active
-    e-commerce integration. Use list_ecommerce_stores to find store IDs. Read-only. Does not
-    modify data.
+    Use this tool to browse the product catalog synced from your e-commerce platform (Shopify,
+    WooCommerce, etc.) to Mailchimp. Useful for verifying product sync status or finding product
+    data for campaign content. Requires an active e-commerce integration; returns empty if none
+    is configured. Use list_ecommerce_stores first to find store IDs and verify integration
+    status. Use get_ecommerce_product_activity instead for campaign-level product revenue data.
+    Read-only. Does not modify data.
 
     Args:
         store_id: The e-commerce store ID. Use list_ecommerce_stores to find IDs.
-        count: Number of products to return (max 1000, default 20).
-        offset: Pagination offset for retrieving additional pages.
+        count: Number of products to return (1-1000, default 20).
+        offset: Pagination offset for retrieving additional pages. Use when total_items
+            exceeds count.
 
     Returns:
-        JSON with total_items and products array (id, title, url, vendor, image_url, variants_count).
+        JSON with total_items and products array. Each product includes: id, title,
+        url (product page link), vendor, image_url, variants_count.
 
     Example:
-        list_store_products(store_id="store123", count=50)
+        list_store_products(store_id="store123", count=50) -> {"total_items": 200, "products": [{"title": "Blue T-Shirt", ...}]}
     """
     data = mc_request(f"/ecommerce/stores/{store_id}/products", params={"count": count, "offset": offset})
     products = []
@@ -2435,20 +2478,27 @@ def create_batch(operations: str) -> str:
 
 @mcp.tool()
 def get_batch_status(batch_id: str) -> str:
-    """Check the status and progress of a batch operation.
+    """Check the progress and completion status of an asynchronous batch operation.
 
-    Use this tool after create_batch to monitor progress. When completed, response_body_url
-    contains a link to download detailed results. Read-only. Does not modify data.
+    Use this tool after create_batch to poll for completion. Batch operations run
+    asynchronously and may take minutes to complete depending on volume. Call this tool
+    repeatedly until status changes to 'finished'. Do not use this tool for non-batch
+    operations; use the individual tool's response directly instead. When the batch finishes,
+    response_body_url contains a downloadable archive with per-operation results. Use
+    list_batches instead to see all recent batch operations at once. Read-only. Does not
+    modify data.
 
     Args:
-        batch_id: The batch operation ID returned by create_batch.
+        batch_id: The batch operation ID returned by create_batch (e.g. 'batch123abc').
 
     Returns:
-        JSON with fields: id, status ('pending', 'started', 'finished'), total_operations,
-        finished_operations, errored_operations, submitted_at, completed_at, response_body_url.
+        JSON with fields: id, status ('pending' = queued, 'started' = in progress,
+        'finished' = complete), total_operations, finished_operations, errored_operations,
+        submitted_at (ISO 8601), completed_at (ISO 8601, null if not finished),
+        response_body_url (download link for results, only available when finished).
 
     Example:
-        get_batch_status(batch_id="batch123") -> {"status": "finished", "finished_operations": 100, ...}
+        get_batch_status(batch_id="batch123") -> {"status": "finished", "total_operations": 100, "finished_operations": 100, "errored_operations": 2, ...}
     """
     data = mc_request(f"/batches/{batch_id}")
     return json.dumps({
