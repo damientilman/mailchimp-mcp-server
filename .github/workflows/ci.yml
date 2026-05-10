@@ -28,4 +28,4 @@ jobs:
         run: uv run python -c "import ast; ast.parse(open('src/mailchimp_mcp_server/server.py').read()); print('Syntax OK')"
 
       - name: Import check
-        run: uv run python -c "from mailchimp_mcp_server.server import mcp; print(f'Server loaded: {len(mcp._tool_manager._tools)} tools')"
+        run: uv run python -c "from mailchimp_mcp_server.server import mcp; print('Server loaded successfully')"
