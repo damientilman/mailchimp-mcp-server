@@ -1,4 +1,57 @@
 {
-  "$schema": "https://glama.ai/schemas/glama.json",
-  "maintainers": ["damientilman"]
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "name": "mailchimp-mcp",
+  "description": "MCP server for the Mailchimp Marketing API. 74 tools for managing campaigns, audiences, members, segments, automations, reports, e-commerce, and more.",
+  "author": {
+    "name": "Damien Tilman",
+    "url": "https://github.com/damientilman"
+  },
+  "maintainers": ["damientilman"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/damientilman/mailchimp-mcp-server"
+  },
+  "homepage": "https://github.com/damientilman/mailchimp-mcp-server",
+  "license": "MIT",
+  "categories": ["Marketing", "Email", "Developer Tools"],
+  "keywords": ["mailchimp", "email-marketing", "campaigns", "audiences", "mcp", "claude", "model-context-protocol"],
+  "capabilities": {
+    "tools": true,
+    "prompts": false,
+    "resources": false,
+    "sampling": false
+  },
+  "configSchema": {
+    "type": "object",
+    "required": ["apiKey"],
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "title": "Mailchimp API Key",
+        "description": "Your Mailchimp API key. Get one at https://mailchimp.com/help/about-api-keys/. Format: key-dc (e.g. abc123def456-us21)."
+      },
+      "readOnly": {
+        "type": "boolean",
+        "title": "Read-Only Mode",
+        "description": "When true, all write operations are blocked. Useful for safe exploration.",
+        "default": false
+      },
+      "dryRun": {
+        "type": "boolean",
+        "title": "Dry-Run Mode",
+        "description": "When true, write operations return a preview of what would happen without executing.",
+        "default": false
+      }
+    }
+  },
+  "relatedServers": [
+    {
+      "name": "Postman MCP Server",
+      "url": "https://glama.ai/mcp/servers/postmanlabs/postman-mcp-server"
+    },
+    {
+      "name": "HubSpot MCP Server",
+      "url": "https://glama.ai/mcp/servers/shinzo-labs/hubspot-mcp"
+    }
+  ]
 }
