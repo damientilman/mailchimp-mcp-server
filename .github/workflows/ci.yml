@@ -7,11 +7,13 @@ on:
     branches: [main]
 
 jobs:
-  lint-and-build:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
@@ -22,10 +24,20 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --extra dev
 
-      - name: Syntax check
-        run: uv run python -c "import ast; ast.parse(open('src/mailchimp_mcp_server/server.py').read()); print('Syntax OK')"
+      - name: Lint with ruff
+        run: uv run ruff check src/ tests/
 
       - name: Import check
         run: uv run python -c "from mailchimp_mcp_server.server import mcp; print('Server loaded successfully')"
+
+      - name: Run tests with coverage
+        run: uv run pytest --cov=mailchimp_mcp_server --cov-report=xml --cov-report=term
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.13'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
