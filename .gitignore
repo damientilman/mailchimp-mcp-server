@@ -10,3 +10,10 @@ venv/
 *.egg
 .pytest_cache/
 .gstack/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+uv.lock

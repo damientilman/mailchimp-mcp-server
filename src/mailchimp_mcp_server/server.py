@@ -1,8 +1,9 @@
-import os
-import json
 import hashlib
-import requests
+import json
+import os
 from typing import Optional
+
+import requests
 from mcp.server.fastmcp import FastMCP
 
 # --- Config ---
@@ -1048,7 +1049,9 @@ def set_campaign_content(campaign_id: str, html: str) -> str:
     """
     if (guard := _guard_write(action="set campaign content", campaign_id=campaign_id)):
         return guard
-    data = mc_request(f"/campaigns/{campaign_id}/content", body={"html": html}, method="PUT")
+    result = mc_request(f"/campaigns/{campaign_id}/content", body={"html": html}, method="PUT")
+    if isinstance(result, dict) and "error" in result:
+        return json.dumps(result, indent=2)
     return json.dumps({"status": "content_set", "campaign_id": campaign_id}, indent=2)
 
 

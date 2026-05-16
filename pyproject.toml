@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mailchimp-mcp"
-version = "0.1.2"
+version = "0.2.0"
 description = "MCP server for the Mailchimp Marketing API — access campaigns, audiences, reports, and more from Claude."
 readme = "README.md"
 license = "MIT"
@@ -29,6 +29,13 @@ dependencies = [
     "requests>=2.28.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/mailchimp_mcp_server"]
 
@@ -40,3 +47,43 @@ mailchimp-mcp-server = "mailchimp_mcp_server.server:main"
 Homepage = "https://github.com/damientilman/mailchimp-mcp-server"
 Repository = "https://github.com/damientilman/mailchimp-mcp-server"
 Issues = "https://github.com/damientilman/mailchimp-mcp-server/issues"
+Changelog = "https://github.com/damientilman/mailchimp-mcp-server/blob/main/CHANGELOG.md"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "B",   # flake8-bugbear
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # function call in default argument (FastMCP pattern)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["src/mailchimp_mcp_server"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
