@@ -511,6 +511,43 @@ def get_template_default_content(template_id: str) -> str:
 
 
 @mcp.tool()
+def get_template(template_id: str) -> str:
+    """Retrieve metadata for a template (name, type, dates, folder, thumbnail) without its HTML content.
+
+    Use to inspect a template's settings or verify it exists before referencing it elsewhere.
+    Use get_template_default_content to fetch the actual HTML body. Use list_templates to browse
+    and discover template IDs.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 error if template_id is invalid.
+
+    Args:
+        template_id: Template ID (numeric string, e.g. '12345'). Obtain from list_templates.
+
+    Returns:
+        JSON with id, name, type ('user' | 'base' | 'gallery'), drag_and_drop (bool),
+        date_created, date_edited, created_by, edited_by, active (bool), folder_id, thumbnail,
+        share_url, category.
+    """
+    data = mc_request(f"/templates/{template_id}")
+    return json.dumps({
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "type": data.get("type"),
+        "drag_and_drop": data.get("drag_and_drop"),
+        "date_created": data.get("date_created"),
+        "date_edited": data.get("date_edited"),
+        "created_by": data.get("created_by"),
+        "edited_by": data.get("edited_by"),
+        "active": data.get("active"),
+        "folder_id": data.get("folder_id"),
+        "thumbnail": data.get("thumbnail"),
+        "share_url": data.get("share_url"),
+        "category": data.get("category"),
+    }, indent=2)
+
+
+@mcp.tool()
 def create_template(name: str, html: str, folder_id: Optional[str] = None) -> str:
     """Create a new reusable email template from HTML content.
 
@@ -2444,6 +2481,154 @@ def get_member_events(list_id: str, email_address: str, count: int = 20) -> str:
     return json.dumps({"email_address": email_address, "total_items": data.get("total_items"), "events": events}, indent=2)
 
 
+# --- Read/Write Tools: Member Notes ---
+
+@mcp.tool()
+def list_member_notes(list_id: str, email_address: str, count: int = 20, offset: int = 0) -> str:
+    """List CRM-style notes attached to a member by team members (not visible to the contact).
+
+    Notes are internal annotations like "Called about pricing" or "VIP customer". They are not
+    sent to the contact and do not affect deliverability. Use add_member_note to create one,
+    update_member_note to edit, delete_member_note to remove.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 error if the member does not exist.
+
+    Args:
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        email_address: Email of the member whose notes to list. Must exist in the audience.
+        count: Number of notes to return (1-1000, default 20).
+        offset: Pagination offset. Use when total_items exceeds count.
+
+    Returns:
+        JSON with email_address, total_items, and notes array. Each note: id (use as note_id),
+        note (string, the text), created_at, created_by, updated_at.
+    """
+    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    data = mc_request(
+        f"/lists/{list_id}/members/{subscriber_hash}/notes",
+        params={"count": count, "offset": offset},
+    )
+    notes = []
+    for n in data.get("notes", []):
+        notes.append({
+            "id": n.get("id"),
+            "note": n.get("note"),
+            "created_at": n.get("created_at"),
+            "created_by": n.get("created_by"),
+            "updated_at": n.get("updated_at"),
+        })
+    return json.dumps({
+        "email_address": email_address,
+        "total_items": data.get("total_items"),
+        "notes": notes,
+    }, indent=2)
+
+
+@mcp.tool()
+def add_member_note(list_id: str, email_address: str, note: str) -> str:
+    """Add a CRM-style internal note to a member. Not sent to the contact.
+
+    Useful for sales/support context, e.g. "Asked for discount on annual plan", "Out of office
+    until June 1st". Use update_member_note to edit an existing note instead of adding another.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 if the member does not exist; returns 400 if note text exceeds 1000 chars.
+
+    Args:
+        list_id: Audience/list ID. Obtain from list_audiences.
+        email_address: Email of the member to attach the note to. Must exist in the audience.
+        note: Note text (max 1000 chars). Plain text; markdown is not rendered in the Mailchimp UI.
+
+    Returns:
+        JSON with id (use as note_id), email_address, note, created_at, created_by.
+    """
+    if (guard := _guard_write(action="add member note", list_id=list_id, email_address=email_address)):
+        return guard
+    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    data = mc_request(
+        f"/lists/{list_id}/members/{subscriber_hash}/notes",
+        body={"note": note},
+        method="POST",
+    )
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({
+        "id": data.get("id"),
+        "email_address": email_address,
+        "note": data.get("note"),
+        "created_at": data.get("created_at"),
+        "created_by": data.get("created_by"),
+    }, indent=2)
+
+
+@mcp.tool()
+def update_member_note(list_id: str, email_address: str, note_id: str, note: str) -> str:
+    """Update the text of an existing member note. Replaces the entire note body.
+
+    Use list_member_notes to find note_ids. Use add_member_note instead to create a new note
+    rather than overwriting; use delete_member_note to remove a note.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 if the note or member does not exist.
+
+    Args:
+        list_id: Audience/list ID. Obtain from list_audiences.
+        email_address: Email of the member who owns the note.
+        note_id: Note ID to update. Obtain from list_member_notes.
+        note: New note text (max 1000 chars). Replaces the previous text entirely.
+
+    Returns:
+        JSON with id, email_address, note (new value), updated_at.
+    """
+    if (guard := _guard_write(action="update member note", list_id=list_id, email_address=email_address, note_id=note_id)):
+        return guard
+    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    data = mc_request(
+        f"/lists/{list_id}/members/{subscriber_hash}/notes/{note_id}",
+        body={"note": note},
+        method="PATCH",
+    )
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({
+        "id": data.get("id"),
+        "email_address": email_address,
+        "note": data.get("note"),
+        "updated_at": data.get("updated_at"),
+    }, indent=2)
+
+
+@mcp.tool()
+def delete_member_note(list_id: str, email_address: str, note_id: str) -> str:
+    """Permanently delete a note attached to a member. Cannot be undone.
+
+    Use list_member_notes to find note_ids before calling. Does not affect the member itself,
+    only the note.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 if the note or member does not exist.
+
+    Args:
+        list_id: Audience/list ID. Obtain from list_audiences.
+        email_address: Email of the member who owns the note.
+        note_id: Note ID to delete. Obtain from list_member_notes.
+
+    Returns:
+        JSON with status ('deleted'), email_address, note_id on success.
+    """
+    if (guard := _guard_write(action="delete member note", list_id=list_id, email_address=email_address, note_id=note_id)):
+        return guard
+    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    result = mc_request(
+        f"/lists/{list_id}/members/{subscriber_hash}/notes/{note_id}",
+        method="DELETE",
+    )
+    if isinstance(result, dict) and "error" in result:
+        return json.dumps(result, indent=2)
+    return json.dumps({"status": "deleted", "email_address": email_address, "note_id": note_id}, indent=2)
+
+
 # --- Read/Write Tools: Automations (granular) ---
 
 @mcp.tool()
@@ -2619,6 +2804,187 @@ def get_landing_page(page_id: str) -> str:
         "list_id": data.get("list_id"),
         "tracking": data.get("tracking"),
     }, indent=2)
+
+
+# --- Write Tools: Landing Pages ---
+
+@mcp.tool()
+def create_landing_page(name: str, title: str, list_id: str, template_id: str, store_id: Optional[str] = None, description: Optional[str] = None, tracking_opens: bool = True, tracking_clicks: bool = True) -> str:
+    """Create a new landing page in draft status from a template, optionally linked to a store.
+
+    The page is created unpublished. Use update_landing_page to edit settings or
+    publish_landing_page to make it live at its public URL. Use list_landing_pages or
+    get_landing_page to inspect existing pages.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 400 error if template_id is invalid or list_id does not exist.
+
+    Args:
+        name: Internal name for the page (shown in the Mailchimp dashboard, not to visitors).
+        title: Browser tab title (shown in the page's HTML <title>).
+        list_id: Audience ID this page collects signups for (e.g. 'abc123def4').
+            Obtain from list_audiences.
+        template_id: Template ID to base the page on. Obtain from list_templates.
+        store_id: Optional e-commerce store ID to link the page to. Obtain from
+            list_ecommerce_stores.
+        description: Optional internal description.
+        tracking_opens: Track view-opens analytics. Default true.
+        tracking_clicks: Track link clicks analytics. Default true.
+
+    Returns:
+        JSON with id (use as page_id for subsequent calls), name, title, status ('unpublished'),
+        url (null until published), created_at, list_id.
+    """
+    if (guard := _guard_write(action="create landing page", name=name, list_id=list_id)):
+        return guard
+    body: dict = {
+        "name": name,
+        "title": title,
+        "list_id": list_id,
+        "template": {"id": int(template_id)},
+        "tracking": {"opens": tracking_opens, "clicks": tracking_clicks},
+    }
+    if store_id:
+        body["store_id"] = store_id
+    if description:
+        body["description"] = description
+    data = mc_request("/landing-pages", body=body, method="POST")
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "title": data.get("title"),
+        "status": data.get("status"),
+        "url": data.get("url"),
+        "created_at": data.get("created_at"),
+        "list_id": data.get("list_id"),
+    }, indent=2)
+
+
+@mcp.tool()
+def update_landing_page(page_id: str, name: Optional[str] = None, title: Optional[str] = None, description: Optional[str] = None, tracking_opens: Optional[bool] = None, tracking_clicks: Optional[bool] = None) -> str:
+    """Update settings of an existing landing page. Only provided fields are changed.
+
+    Cannot change list_id or template after creation; create a new page instead. Use
+    publish_landing_page / unpublish_landing_page to change live status. Use get_landing_page
+    to inspect current settings before updating.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 error if page_id is invalid.
+
+    Args:
+        page_id: Landing page ID. Obtain from list_landing_pages.
+        name: New internal name.
+        title: New browser tab title.
+        description: New internal description.
+        tracking_opens: Toggle open tracking on/off.
+        tracking_clicks: Toggle click tracking on/off.
+
+    Returns:
+        JSON with id, name, title, status, url, updated_at, list_id.
+    """
+    if (guard := _guard_write(action="update landing page", page_id=page_id)):
+        return guard
+    body: dict = {}
+    if name is not None:
+        body["name"] = name
+    if title is not None:
+        body["title"] = title
+    if description is not None:
+        body["description"] = description
+    tracking: dict = {}
+    if tracking_opens is not None:
+        tracking["opens"] = tracking_opens
+    if tracking_clicks is not None:
+        tracking["clicks"] = tracking_clicks
+    if tracking:
+        body["tracking"] = tracking
+    data = mc_request(f"/landing-pages/{page_id}", body=body, method="PATCH")
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "title": data.get("title"),
+        "status": data.get("status"),
+        "url": data.get("url"),
+        "updated_at": data.get("updated_at"),
+        "list_id": data.get("list_id"),
+    }, indent=2)
+
+
+@mcp.tool()
+def delete_landing_page(page_id: str) -> str:
+    """Permanently delete a landing page. Cannot be undone.
+
+    Side effect: the page becomes inaccessible at its public URL immediately. Past visit
+    analytics remain in Mailchimp's reports area but the page itself is gone. Use
+    unpublish_landing_page if you only want to take it offline temporarily.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 error if page_id is invalid.
+
+    Args:
+        page_id: Landing page ID to delete. Obtain from list_landing_pages.
+
+    Returns:
+        JSON with status ('deleted') and page_id on success.
+    """
+    if (guard := _guard_write(action="delete landing page", page_id=page_id)):
+        return guard
+    result = mc_request(f"/landing-pages/{page_id}", method="DELETE")
+    if isinstance(result, dict) and "error" in result:
+        return json.dumps(result, indent=2)
+    return json.dumps({"status": "deleted", "page_id": page_id}, indent=2)
+
+
+@mcp.tool()
+def publish_landing_page(page_id: str) -> str:
+    """Publish a landing page, making it live at its public URL.
+
+    Idempotent on already-published pages. Use unpublish_landing_page to take a page offline.
+    Use get_landing_page to confirm the live URL after publishing.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 400 if the page is missing required content; returns 404 if page_id is invalid.
+
+    Args:
+        page_id: Landing page ID to publish. Obtain from list_landing_pages.
+
+    Returns:
+        JSON with status ('published') and page_id on success.
+    """
+    if (guard := _guard_write(action="publish landing page", page_id=page_id)):
+        return guard
+    result = mc_request(f"/landing-pages/{page_id}/actions/publish", method="POST")
+    if isinstance(result, dict) and "error" in result:
+        return json.dumps(result, indent=2)
+    return json.dumps({"status": "published", "page_id": page_id}, indent=2)
+
+
+@mcp.tool()
+def unpublish_landing_page(page_id: str) -> str:
+    """Take a published landing page offline. The public URL stops serving the page.
+
+    Reversible — re-publish with publish_landing_page. Use delete_landing_page for permanent
+    removal instead.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 error if page_id is invalid.
+
+    Args:
+        page_id: Landing page ID to unpublish. Obtain from list_landing_pages.
+
+    Returns:
+        JSON with status ('unpublished') and page_id on success.
+    """
+    if (guard := _guard_write(action="unpublish landing page", page_id=page_id)):
+        return guard
+    result = mc_request(f"/landing-pages/{page_id}/actions/unpublish", method="POST")
+    if isinstance(result, dict) and "error" in result:
+        return json.dumps(result, indent=2)
+    return json.dumps({"status": "unpublished", "page_id": page_id}, indent=2)
 
 
 # --- Read Tools: E-commerce ---

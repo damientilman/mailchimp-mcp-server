@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05
+
+### Added
+- **Landing page lifecycle**: `create_landing_page`, `update_landing_page`,
+  `delete_landing_page`, `publish_landing_page`, `unpublish_landing_page` — full
+  CRUD plus publish/unpublish actions on top of the existing read tools
+  (closes #11).
+- **Member notes (CRM-style)**: `list_member_notes`, `add_member_note`,
+  `update_member_note`, `delete_member_note` for internal annotations on
+  contacts that are never sent to them (closes #8).
+- **`get_template`**: metadata-only template lookup (name, type, dates,
+  thumbnail, share URL) complementing the existing `get_template_default_content`
+  for HTML retrieval (closes #10).
+- Smoke tests for the ten new tools, including subscriber-hash routing for
+  member notes and the JSON-shape contracts for landing page actions.
+
+### Changed
+- Tool count bumped to **97** (was 87) — README, `glama.json`, and
+  `pyproject.toml` descriptions updated accordingly.
+
 ## [0.3.0] - 2026-05
 
 ### Added
@@ -88,7 +108,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   landing pages, e-commerce, and batch operations.
 - MIT license, Python 3.10+ support, MCP-compatible via FastMCP.
 
-[Unreleased]: https://github.com/damientilman/mailchimp-mcp-server/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/damientilman/mailchimp-mcp-server/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/damientilman/mailchimp-mcp-server/releases/tag/v0.4.0
 [0.3.0]: https://github.com/damientilman/mailchimp-mcp-server/releases/tag/v0.3.0
 [0.2.1]: https://github.com/damientilman/mailchimp-mcp-server/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/damientilman/mailchimp-mcp-server/releases/tag/v0.2.0

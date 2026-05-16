@@ -7,7 +7,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io)
 
-The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **87 tools** to query and manage your Mailchimp account from any MCP-compatible client, with A/B campaign support, geographic reporting, and read-only / dry-run safety modes.
+The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **97 tools** to query and manage your Mailchimp account from any MCP-compatible client, with A/B campaign support, geographic reporting, full landing-page lifecycle, CRM-style member notes, and read-only / dry-run safety modes.
 
 Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api/) via [`requests`](https://pypi.org/project/requests/). Not based on the official [mailchimp-marketing-python](https://github.com/mailchimp/mailchimp-marketing-python) client. I hit too many issues with it so I went with raw HTTP calls instead.
 
@@ -240,6 +240,7 @@ Replace `mcp-cli` with your client's binary name. For read-only mode, add
 | `get_member_activity` | Activity history of a specific contact |
 | `get_member_tags` | All tags assigned to a contact |
 | `get_member_events` | Custom events for a contact |
+| `list_member_notes` | List CRM-style internal notes attached to a contact |
 
 ### Members (write)
 
@@ -250,6 +251,9 @@ Replace `mcp-cli` with your client's binary name. For read-only mode, add
 | `unsubscribe_member` | Unsubscribe a contact |
 | `delete_member` | Permanently delete a contact |
 | `tag_member` | Add or remove tags from a contact |
+| `add_member_note` | Attach a CRM-style internal note to a contact |
+| `update_member_note` | Update the text of an existing member note |
+| `delete_member_note` | Delete a member note |
 
 ### Audiences (write)
 
@@ -316,6 +320,7 @@ Replace `mcp-cli` with your client's binary name. For read-only mode, add
 | Tool | Description |
 |---|---|
 | `list_templates` | List available email templates |
+| `get_template` | Get template metadata (name, type, dates, thumbnail) |
 | `get_template_default_content` | Get template HTML content |
 | `create_template` | Create a new email template |
 | `update_template` | Update template name or HTML |
@@ -327,6 +332,11 @@ Replace `mcp-cli` with your client's binary name. For read-only mode, add
 |---|---|
 | `list_landing_pages` | List all landing pages |
 | `get_landing_page` | Get details of a landing page |
+| `create_landing_page` | Create a new landing page from a template |
+| `update_landing_page` | Update settings of an existing landing page |
+| `delete_landing_page` | Permanently delete a landing page |
+| `publish_landing_page` | Publish a landing page to its public URL |
+| `unpublish_landing_page` | Take a published landing page offline |
 
 ### E-commerce
 
