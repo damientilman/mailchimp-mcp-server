@@ -7,12 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05
+
+### Added
+- **A/B (variate) campaigns**: `create_campaign` now accepts `campaign_type='variate'`
+  and a `variate_settings_json` payload describing subject lines / from names / send
+  times / contents to test, the winner criterion, the test sample size, and the
+  wait time before declaring a winner.
+- **Audience lifecycle**: new `create_audience` and `delete_audience` tools for full
+  list creation and removal (closes #9).
+- **Advanced reports**: new `get_campaign_advice`, `get_campaign_locations`, and
+  `get_eepurl_activity` tools for post-send feedback, geographic open breakdowns,
+  and social sharing stats (closes #13).
+- Test coverage extended to all five new tools and to the variate campaign branch
+  of `create_campaign`.
+
+### Changed
+- Tool count bumped to **87** (was 82) — README, `pyproject.toml`, and `glama.json`
+  descriptions updated accordingly.
+
+## [0.2.1] - 2026-05
+
 ### Added
 - Test suite covering safety modes, request helpers, and a smoke test per tool family.
 - `CONTRIBUTING.md` with development setup and contribution guidelines.
 - `SECURITY.md` with vulnerability reporting policy.
 - CI improvements: linting (ruff), test execution, and coverage reporting.
 - Multi-stage Dockerfile running as a non-root user.
+
+### Changed
+- Documentation rewritten to be MCP-client agnostic; install sections now show
+  generic JSON/CLI examples rather than client-specific snippets.
 
 ## [0.2.0] - 2026-05
 
@@ -63,7 +88,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   landing pages, e-commerce, and batch operations.
 - MIT license, Python 3.10+ support, MCP-compatible via FastMCP.
 
-[Unreleased]: https://github.com/damientilman/mailchimp-mcp-server/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/damientilman/mailchimp-mcp-server/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/damientilman/mailchimp-mcp-server/releases/tag/v0.3.0
+[0.2.1]: https://github.com/damientilman/mailchimp-mcp-server/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/damientilman/mailchimp-mcp-server/releases/tag/v0.2.0
 [0.1.2]: https://github.com/damientilman/mailchimp-mcp-server/releases/tag/v0.1.2
 [0.1.1]: https://github.com/damientilman/mailchimp-mcp-server/releases/tag/v0.1.1

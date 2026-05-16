@@ -7,7 +7,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io)
 
-The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **82 tools** to query and manage your Mailchimp account from any MCP-compatible client, with read-only and dry-run safety modes.
+The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **87 tools** to query and manage your Mailchimp account from any MCP-compatible client, with A/B campaign support, geographic reporting, and read-only / dry-run safety modes.
 
 Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api/) via [`requests`](https://pypi.org/project/requests/). Not based on the official [mailchimp-marketing-python](https://github.com/mailchimp/mailchimp-marketing-python) client. I hit too many issues with it so I went with raw HTTP calls instead.
 
@@ -204,12 +204,15 @@ Replace `mcp-cli` with your client's binary name. For read-only mode, add
 | `get_domain_performance` | Performance by email domain (gmail, outlook, etc.) |
 | `get_ecommerce_product_activity` | Revenue per product for a campaign |
 | `get_campaign_sub_reports` | Sub-reports (A/B tests, RSS, etc.) |
+| `get_campaign_advice` | Mailchimp's automated post-send feedback on a campaign |
+| `get_campaign_locations` | Geographic open data (country, region) |
+| `get_eepurl_activity` | Social sharing stats (Twitter, Facebook, referrers) |
 
 ### Campaigns (write)
 
 | Tool | Description |
 |---|---|
-| `create_campaign` | Create a new campaign draft (with optional segment targeting) |
+| `create_campaign` | Create a new campaign draft (regular or A/B `variate`, with optional segment targeting) |
 | `update_campaign` | Update settings or segment targeting of a campaign |
 | `set_campaign_content` | Set the HTML content of a campaign draft |
 | `schedule_campaign` | Schedule a campaign for a specific date/time |
@@ -254,6 +257,8 @@ Replace `mcp-cli` with your client's binary name. For read-only mode, add
 |---|---|
 | `batch_subscribe` | Batch add/update multiple members in an audience |
 | `update_audience` | Update audience settings (name, defaults, permission reminder) |
+| `create_audience` | Create a new audience with contact info and campaign defaults |
+| `delete_audience` | Permanently delete an audience and all its data |
 
 ### Segments & Tags
 
@@ -360,6 +365,9 @@ Once connected, you can ask your MCP client to perform requests like:
 - *"Set up a webhook to notify my app when new subscribers join"*
 - *"Unsubscribe user@example.com from my list"*
 - *"Show me the domain performance breakdown for my last campaign"*
+- *"Where in the world did people open my newsletter? Show me the geographic breakdown."*
+- *"Create an A/B test campaign with two subject lines and pick the winner by opens after 24 hours"*
+- *"What advice does Mailchimp have for improving my last campaign?"*
 - *"Pause my welcome automation"*
 - *"List all orders from my Shopify store this month"*
 

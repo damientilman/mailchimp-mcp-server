@@ -140,3 +140,166 @@ class TestMembers:
         body = calls[0]["body"]
         assert body["tags"] == ["VIP", "Newsletter"]
         assert body["merge_fields"]["FNAME"] == "Alice"
+
+
+class TestAudienceCRUD:
+    def _valid_payload(self) -> dict:
+        return {
+            "name": "New Audience",
+            "from_name": "Damien",
+            "from_email": "damien@tilman.marketing",
+            "subject": "Welcome",
+            "language": "en",
+            "company": "Tilman Marketing",
+            "address1": "1 Main St",
+            "city": "Paris",
+            "state": "IDF",
+            "zip": "75001",
+            "country": "FR",
+            "permission_reminder": "You signed up at tilman.marketing.",
+        }
+
+    def test_create_audience_sends_required_fields(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {
+                "id": "new_list",
+                "name": "New Audience",
+                "stats": {"member_count": 0},
+                "date_created": "2026-05-16T00:00:00Z",
+                "subscribe_url_short": "http://eepurl.com/x",
+            }
+        )
+        result = server.create_audience(**self._valid_payload())
+        payload = json.loads(result)
+
+        assert payload["id"] == "new_list"
+        assert payload["member_count"] == 0
+
+        body = calls[0]["body"]
+        assert calls[0]["endpoint"] == "/lists"
+        assert calls[0]["method"] == "POST"
+        assert body["name"] == "New Audience"
+        assert body["contact"]["country"] == "FR"
+        assert body["campaign_defaults"]["from_email"] == "damien@tilman.marketing"
+        assert body["email_type_option"] is False
+
+    def test_create_audience_propagates_api_error(self, mock_mc_request) -> None:
+        mock_mc_request({"error": "Invalid Resource", "detail": "address1 is required", "status": 400})
+        result = server.create_audience(**self._valid_payload())
+        payload = json.loads(result)
+        assert payload["error"] == "Invalid Resource"
+
+    def test_delete_audience(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"status": "success"})
+        result = server.delete_audience(list_id="list_a")
+        payload = json.loads(result)
+        assert payload == {"status": "deleted", "list_id": "list_a"}
+        assert calls[0]["method"] == "DELETE"
+        assert calls[0]["endpoint"] == "/lists/list_a"
+
+
+class TestVariateCampaigns:
+    def test_regular_campaign_default_type(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {"id": "cam1", "status": "save", "type": "regular", "settings": {"title": "Hi"}, "web_id": 1}
+        )
+        server.create_campaign(list_id="abc", subject_line="Hi")
+        body = calls[0]["body"]
+        assert body["type"] == "regular"
+        assert "variate_settings" not in body
+
+    def test_variate_campaign_parses_settings(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {"id": "cam2", "status": "save", "type": "variate", "settings": {"title": "AB"}, "web_id": 2}
+        )
+        variate = json.dumps(
+            {
+                "winner_criteria": "opens",
+                "test_size": 20,
+                "wait_time": 1440,
+                "subject_lines": ["Spring Sale 20% off", "Last chance: 20% off Spring"],
+            }
+        )
+        result = server.create_campaign(
+            list_id="abc",
+            subject_line="Spring Sale 20% off",
+            campaign_type="variate",
+            variate_settings_json=variate,
+        )
+        payload = json.loads(result)
+        assert payload["type"] == "variate"
+
+        body = calls[0]["body"]
+        assert body["type"] == "variate"
+        assert body["variate_settings"]["winner_criteria"] == "opens"
+        assert body["variate_settings"]["subject_lines"] == [
+            "Spring Sale 20% off",
+            "Last chance: 20% off Spring",
+        ]
+
+    def test_variate_requires_settings(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"should": "not-be-called"})
+        result = server.create_campaign(
+            list_id="abc",
+            subject_line="Hi",
+            campaign_type="variate",
+        )
+        payload = json.loads(result)
+        assert "error" in payload
+        assert "variate_settings_json is required" in payload["error"]
+        assert calls == []
+
+    def test_variate_rejects_invalid_json(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"should": "not-be-called"})
+        result = server.create_campaign(
+            list_id="abc",
+            subject_line="Hi",
+            campaign_type="variate",
+            variate_settings_json="{not valid json",
+        )
+        payload = json.loads(result)
+        assert "Invalid variate_settings_json" in payload["error"]
+        assert calls == []
+
+
+class TestReportsExtras:
+    def test_get_campaign_advice(self, mock_mc_request) -> None:
+        mock_mc_request(
+            {
+                "total_items": 2,
+                "advice": [
+                    {"type": "negative", "message": "Your open rate is below industry average."},
+                    {"type": "positive", "message": "Click rate is strong."},
+                ],
+            }
+        )
+        payload = json.loads(server.get_campaign_advice(campaign_id="cam_1"))
+        assert payload["total_items"] == 2
+        assert payload["advice"][0]["type"] == "negative"
+
+    def test_get_campaign_locations_pagination(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {
+                "total_items": 1,
+                "locations": [
+                    {"country_code": "US", "region": "CA", "region_name": "California", "opens": 42},
+                ],
+            }
+        )
+        payload = json.loads(server.get_campaign_locations(campaign_id="cam_1", count=50))
+        assert payload["locations"][0]["country_code"] == "US"
+        assert calls[0]["params"]["count"] == 50
+
+    def test_get_eepurl_activity(self, mock_mc_request) -> None:
+        mock_mc_request(
+            {
+                "eepurl": "http://eepurl.com/xyz",
+                "twitter": {"statuses": 12, "impressions": 5000},
+                "facebook": {"likes": 30, "unique_likes": 28},
+                "clicks": {"referrer_clicks": [{"referrer": "t.co", "clicks": 12}]},
+            }
+        )
+        payload = json.loads(server.get_eepurl_activity(campaign_id="cam_1"))
+        assert payload["eepurl"] == "http://eepurl.com/xyz"
+        assert payload["twitter"]["impressions"] == 5000
+        assert payload["referrers"][0]["referrer"] == "t.co"
