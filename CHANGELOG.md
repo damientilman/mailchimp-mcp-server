@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05
+
+### Added
+- **E-commerce carts CRUD**: `list_store_carts`, `get_store_cart`,
+  `create_store_cart`, `update_store_cart`, `delete_store_cart` — full lifecycle
+  for cart objects, with line items passed as JSON for create/update. Designed
+  to support abandoned-cart recovery workflows where the cart originates in an
+  external system.
+- **E-commerce promo rules CRUD**: `list_promo_rules`, `get_promo_rule`,
+  `create_promo_rule`, `update_promo_rule`, `delete_promo_rule` — define
+  discount mechanics (fixed amount, percentage, or free shipping; targeting
+  per-item, total, or shipping cost).
+- **E-commerce promo codes CRUD**: `list_promo_codes`, `get_promo_code`,
+  `create_promo_code`, `update_promo_code`, `delete_promo_code` — manage the
+  redeemable codes (e.g. `SUMMER20`) attached to a promo rule.
+- 16 new smoke tests covering the additions, including JSON parsing for cart
+  line items and the partial-PATCH paths on every update tool.
+- Closes #19 (partial — the high-value subset specifically called out in the
+  issue is implemented; full CRUD for stores, customers, orders, products, and
+  variants is intentionally deferred because in practice that data is synced
+  from external storefronts).
+
+### Changed
+- Tool count bumped to **112** (was 97) — README, `glama.json`, and
+  `pyproject.toml` descriptions updated accordingly.
+
 ## [0.4.0] - 2026-05
 
 ### Added
@@ -108,7 +134,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   landing pages, e-commerce, and batch operations.
 - MIT license, Python 3.10+ support, MCP-compatible via FastMCP.
 
-[Unreleased]: https://github.com/damientilman/mailchimp-mcp-server/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/damientilman/mailchimp-mcp-server/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/damientilman/mailchimp-mcp-server/releases/tag/v0.5.0
 [0.4.0]: https://github.com/damientilman/mailchimp-mcp-server/releases/tag/v0.4.0
 [0.3.0]: https://github.com/damientilman/mailchimp-mcp-server/releases/tag/v0.3.0
 [0.2.1]: https://github.com/damientilman/mailchimp-mcp-server/compare/v0.2.0...v0.2.1

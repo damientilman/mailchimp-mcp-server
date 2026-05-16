@@ -3129,6 +3129,658 @@ def list_store_customers(store_id: str, count: int = 20, offset: int = 0) -> str
     return json.dumps({"total_items": data.get("total_items"), "customers": customers}, indent=2)
 
 
+# --- Read/Write Tools: E-commerce Carts ---
+
+@mcp.tool()
+def list_store_carts(store_id: str, count: int = 20, offset: int = 0) -> str:
+    """List carts for a store, including abandoned ones, with customer and total info.
+
+    Carts in Mailchimp typically represent in-progress purchases synced from a connected
+    storefront. Use for abandoned-cart workflows: filter by recent created_at, segment by
+    cart total, then trigger a recovery automation. Use get_store_cart for a single cart
+    with line items. Use list_store_orders for completed purchases.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 if store_id is invalid.
+
+    Args:
+        store_id: E-commerce store ID. Obtain from list_ecommerce_stores.
+        count: Number of carts to return (1-1000, default 20).
+        offset: Pagination offset.
+
+    Returns:
+        JSON with store_id, total_items, and carts array. Each cart: id, customer (object
+        with id, email_address, opt_in_status), currency_code, order_total, tax_total,
+        checkout_url, created_at, updated_at.
+    """
+    data = mc_request(
+        f"/ecommerce/stores/{store_id}/carts",
+        params={"count": count, "offset": offset},
+    )
+    carts = []
+    for c in data.get("carts", []):
+        carts.append({
+            "id": c.get("id"),
+            "customer": c.get("customer"),
+            "currency_code": c.get("currency_code"),
+            "order_total": c.get("order_total"),
+            "tax_total": c.get("tax_total"),
+            "checkout_url": c.get("checkout_url"),
+            "created_at": c.get("created_at"),
+            "updated_at": c.get("updated_at"),
+        })
+    return json.dumps({
+        "store_id": store_id,
+        "total_items": data.get("total_items"),
+        "carts": carts,
+    }, indent=2)
+
+
+@mcp.tool()
+def get_store_cart(store_id: str, cart_id: str) -> str:
+    """Retrieve a single cart with its full line items, customer, and total breakdown.
+
+    Use to inspect what's in an abandoned cart before triggering a recovery email.
+    Use list_store_carts to browse and discover cart_ids.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 if store_id or cart_id is invalid.
+
+    Args:
+        store_id: E-commerce store ID. Obtain from list_ecommerce_stores.
+        cart_id: Cart ID. Obtain from list_store_carts.
+
+    Returns:
+        JSON with id, customer, currency_code, order_total, tax_total, checkout_url,
+        lines (array of {id, product_id, product_variant_id, quantity, price}),
+        created_at, updated_at.
+    """
+    data = mc_request(f"/ecommerce/stores/{store_id}/carts/{cart_id}")
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({
+        "id": data.get("id"),
+        "customer": data.get("customer"),
+        "currency_code": data.get("currency_code"),
+        "order_total": data.get("order_total"),
+        "tax_total": data.get("tax_total"),
+        "checkout_url": data.get("checkout_url"),
+        "lines": data.get("lines"),
+        "created_at": data.get("created_at"),
+        "updated_at": data.get("updated_at"),
+    }, indent=2)
+
+
+@mcp.tool()
+def create_store_cart(store_id: str, cart_id: str, customer_id: str, currency_code: str, order_total: float, lines_json: str, checkout_url: Optional[str] = None, tax_total: Optional[float] = None) -> str:
+    """Create a cart in a store with line items and a customer reference. Used to push
+    abandoned-cart data from an external system into Mailchimp for recovery workflows.
+
+    cart_id is client-supplied (Mailchimp does not auto-generate it). The customer must
+    already exist in the store; create them via Mailchimp's customer endpoints first if
+    not. Use update_store_cart to modify after creation.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        store_id: E-commerce store ID.
+        cart_id: Client-supplied unique ID for the new cart (e.g. 'cart_42').
+        customer_id: ID of an existing customer in the store.
+        currency_code: ISO 4217 currency code (e.g. 'USD', 'EUR').
+        order_total: Total order amount (line items + tax + shipping if any).
+        lines_json: JSON string with the cart line items array. Example:
+            '[{"id": "line_1", "product_id": "p_1", "product_variant_id": "p_1_red",
+               "quantity": 2, "price": 19.99}]'
+        checkout_url: Optional URL to resume the cart (used in recovery emails).
+        tax_total: Optional tax portion of order_total.
+
+    Returns:
+        JSON with id, customer, currency_code, order_total, checkout_url, created_at.
+    """
+    if (guard := _guard_write(action="create cart", store_id=store_id, cart_id=cart_id)):
+        return guard
+    try:
+        lines = json.loads(lines_json)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid lines_json: {e}"}, indent=2)
+    body: dict = {
+        "id": cart_id,
+        "customer": {"id": customer_id},
+        "currency_code": currency_code,
+        "order_total": order_total,
+        "lines": lines,
+    }
+    if checkout_url:
+        body["checkout_url"] = checkout_url
+    if tax_total is not None:
+        body["tax_total"] = tax_total
+    data = mc_request(f"/ecommerce/stores/{store_id}/carts", body=body, method="POST")
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({
+        "id": data.get("id"),
+        "customer": data.get("customer"),
+        "currency_code": data.get("currency_code"),
+        "order_total": data.get("order_total"),
+        "checkout_url": data.get("checkout_url"),
+        "created_at": data.get("created_at"),
+    }, indent=2)
+
+
+@mcp.tool()
+def update_store_cart(store_id: str, cart_id: str, order_total: Optional[float] = None, tax_total: Optional[float] = None, checkout_url: Optional[str] = None, currency_code: Optional[str] = None, lines_json: Optional[str] = None) -> str:
+    """Update an existing cart's totals, currency, checkout URL, or line items.
+
+    Only provided fields are changed. To replace line items, pass a full lines_json array
+    (partial line updates are not supported by this tool — use the Mailchimp UI or REST
+    API directly for line-level edits).
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 if store_id or cart_id is invalid.
+
+    Args:
+        store_id: E-commerce store ID.
+        cart_id: Existing cart ID.
+        order_total: New order total.
+        tax_total: New tax portion.
+        checkout_url: New checkout URL.
+        currency_code: New ISO 4217 currency code.
+        lines_json: JSON string with a replacement line items array.
+
+    Returns:
+        JSON with id, order_total, tax_total, checkout_url, currency_code, updated_at.
+    """
+    if (guard := _guard_write(action="update cart", store_id=store_id, cart_id=cart_id)):
+        return guard
+    body: dict = {}
+    if order_total is not None:
+        body["order_total"] = order_total
+    if tax_total is not None:
+        body["tax_total"] = tax_total
+    if checkout_url is not None:
+        body["checkout_url"] = checkout_url
+    if currency_code is not None:
+        body["currency_code"] = currency_code
+    if lines_json is not None:
+        try:
+            body["lines"] = json.loads(lines_json)
+        except json.JSONDecodeError as e:
+            return json.dumps({"error": f"Invalid lines_json: {e}"}, indent=2)
+    data = mc_request(f"/ecommerce/stores/{store_id}/carts/{cart_id}", body=body, method="PATCH")
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({
+        "id": data.get("id"),
+        "order_total": data.get("order_total"),
+        "tax_total": data.get("tax_total"),
+        "checkout_url": data.get("checkout_url"),
+        "currency_code": data.get("currency_code"),
+        "updated_at": data.get("updated_at"),
+    }, indent=2)
+
+
+@mcp.tool()
+def delete_store_cart(store_id: str, cart_id: str) -> str:
+    """Permanently delete a cart from a store. Cannot be undone.
+
+    Use when an external system reports the cart has been completed (converted to order)
+    or expired. Does not affect related orders or customer records.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 if store_id or cart_id is invalid.
+
+    Args:
+        store_id: E-commerce store ID.
+        cart_id: Cart ID to delete.
+
+    Returns:
+        JSON with status ('deleted'), store_id, cart_id on success.
+    """
+    if (guard := _guard_write(action="delete cart", store_id=store_id, cart_id=cart_id)):
+        return guard
+    result = mc_request(f"/ecommerce/stores/{store_id}/carts/{cart_id}", method="DELETE")
+    if isinstance(result, dict) and "error" in result:
+        return json.dumps(result, indent=2)
+    return json.dumps({"status": "deleted", "store_id": store_id, "cart_id": cart_id}, indent=2)
+
+
+# --- Read/Write Tools: E-commerce Promo Rules ---
+
+@mcp.tool()
+def list_promo_rules(store_id: str, count: int = 20, offset: int = 0) -> str:
+    """List discount/promo rules configured for a store (fixed amount, percentage, free shipping).
+
+    A promo rule defines the discount mechanic (e.g. '20% off entire order'). Codes that
+    customers redeem are attached to rules via list_promo_codes / create_promo_code.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        store_id: E-commerce store ID. Obtain from list_ecommerce_stores.
+        count: Number of rules to return (1-1000, default 20).
+        offset: Pagination offset.
+
+    Returns:
+        JSON with store_id, total_items, and promo_rules array. Each rule: id, title,
+        description, amount, type ('fixed' | 'percentage'), target ('per_item' | 'total' |
+        'shipping'), enabled (bool), starts_at, ends_at, created_at, updated_at.
+    """
+    data = mc_request(
+        f"/ecommerce/stores/{store_id}/promo-rules",
+        params={"count": count, "offset": offset},
+    )
+    rules = []
+    for r in data.get("promo_rules", []):
+        rules.append({
+            "id": r.get("id"),
+            "title": r.get("title"),
+            "description": r.get("description"),
+            "amount": r.get("amount"),
+            "type": r.get("type"),
+            "target": r.get("target"),
+            "enabled": r.get("enabled"),
+            "starts_at": r.get("starts_at"),
+            "ends_at": r.get("ends_at"),
+        })
+    return json.dumps({
+        "store_id": store_id,
+        "total_items": data.get("total_items"),
+        "promo_rules": rules,
+    }, indent=2)
+
+
+@mcp.tool()
+def get_promo_rule(store_id: str, promo_rule_id: str) -> str:
+    """Retrieve a single promo rule by ID with its full configuration.
+
+    Use to inspect a rule's current settings before updating, or to confirm a rule exists
+    before attaching new codes. Use list_promo_rules to browse and discover IDs.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 if store_id or promo_rule_id is invalid.
+
+    Args:
+        store_id: E-commerce store ID.
+        promo_rule_id: Rule ID to inspect.
+
+    Returns:
+        JSON with id, title, description, amount, type, target, enabled, starts_at,
+        ends_at, created_at, updated_at.
+    """
+    data = mc_request(f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}")
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({
+        "id": data.get("id"),
+        "title": data.get("title"),
+        "description": data.get("description"),
+        "amount": data.get("amount"),
+        "type": data.get("type"),
+        "target": data.get("target"),
+        "enabled": data.get("enabled"),
+        "starts_at": data.get("starts_at"),
+        "ends_at": data.get("ends_at"),
+        "created_at": data.get("created_at"),
+        "updated_at": data.get("updated_at"),
+    }, indent=2)
+
+
+@mcp.tool()
+def create_promo_rule(store_id: str, promo_rule_id: str, description: str, amount: float, type: str, target: str, enabled: bool = True, title: Optional[str] = None, starts_at: Optional[str] = None, ends_at: Optional[str] = None) -> str:
+    """Create a promo rule (discount mechanic) in a store. Attach codes to it afterwards
+    via create_promo_code.
+
+    promo_rule_id is client-supplied. Common patterns: amount=20 + type='percentage' +
+    target='total' for '20% off entire order'; amount=5 + type='fixed' + target='shipping'
+    for '$5 off shipping'.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        store_id: E-commerce store ID.
+        promo_rule_id: Client-supplied unique ID for the rule.
+        description: Internal description shown in Mailchimp UI.
+        amount: Discount value. For type='percentage', a value between 0 and 100.
+        type: 'fixed' for absolute amount or 'percentage' for percent off.
+        target: 'per_item' (each item), 'total' (whole order), or 'shipping' (shipping cost only).
+        enabled: Whether the rule is active. Default true.
+        title: Optional public title.
+        starts_at: Optional ISO 8601 start datetime (rule inactive before this).
+        ends_at: Optional ISO 8601 end datetime (rule inactive after this).
+
+    Returns:
+        JSON with id, title, description, amount, type, target, enabled, created_at.
+    """
+    if (guard := _guard_write(action="create promo rule", store_id=store_id, promo_rule_id=promo_rule_id)):
+        return guard
+    body: dict = {
+        "id": promo_rule_id,
+        "description": description,
+        "amount": amount,
+        "type": type,
+        "target": target,
+        "enabled": enabled,
+    }
+    if title:
+        body["title"] = title
+    if starts_at:
+        body["starts_at"] = starts_at
+    if ends_at:
+        body["ends_at"] = ends_at
+    data = mc_request(f"/ecommerce/stores/{store_id}/promo-rules", body=body, method="POST")
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({
+        "id": data.get("id"),
+        "title": data.get("title"),
+        "description": data.get("description"),
+        "amount": data.get("amount"),
+        "type": data.get("type"),
+        "target": data.get("target"),
+        "enabled": data.get("enabled"),
+        "created_at": data.get("created_at"),
+    }, indent=2)
+
+
+@mcp.tool()
+def update_promo_rule(store_id: str, promo_rule_id: str, description: Optional[str] = None, amount: Optional[float] = None, type: Optional[str] = None, target: Optional[str] = None, enabled: Optional[bool] = None, title: Optional[str] = None, starts_at: Optional[str] = None, ends_at: Optional[str] = None) -> str:
+    """Update an existing promo rule. Only provided fields are changed.
+
+    Useful to toggle a rule on/off (enabled), extend an end date, or adjust the discount
+    amount mid-campaign. Use list_promo_rules to discover promo_rule_ids.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 if store_id or promo_rule_id is invalid.
+
+    Args:
+        store_id: E-commerce store ID.
+        promo_rule_id: Existing rule ID.
+        description: New internal description.
+        amount: New discount amount.
+        type: New type ('fixed' or 'percentage').
+        target: New target ('per_item', 'total', or 'shipping').
+        enabled: Toggle the rule on/off.
+        title: New public title.
+        starts_at: New start datetime (ISO 8601).
+        ends_at: New end datetime (ISO 8601).
+
+    Returns:
+        JSON with id, title, description, amount, type, target, enabled, updated_at.
+    """
+    if (guard := _guard_write(action="update promo rule", store_id=store_id, promo_rule_id=promo_rule_id)):
+        return guard
+    body: dict = {}
+    for key, value in [
+        ("description", description),
+        ("amount", amount),
+        ("type", type),
+        ("target", target),
+        ("enabled", enabled),
+        ("title", title),
+        ("starts_at", starts_at),
+        ("ends_at", ends_at),
+    ]:
+        if value is not None:
+            body[key] = value
+    data = mc_request(
+        f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}",
+        body=body,
+        method="PATCH",
+    )
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({
+        "id": data.get("id"),
+        "title": data.get("title"),
+        "description": data.get("description"),
+        "amount": data.get("amount"),
+        "type": data.get("type"),
+        "target": data.get("target"),
+        "enabled": data.get("enabled"),
+        "updated_at": data.get("updated_at"),
+    }, indent=2)
+
+
+@mcp.tool()
+def delete_promo_rule(store_id: str, promo_rule_id: str) -> str:
+    """Permanently delete a promo rule and all its associated promo codes. Irreversible.
+
+    Side effect: every promo code attached to this rule is also deleted and stops working
+    at checkout. Use update_promo_rule with enabled=false to disable a rule without
+    deleting its codes.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 if store_id or promo_rule_id is invalid.
+
+    Args:
+        store_id: E-commerce store ID.
+        promo_rule_id: Rule ID to delete.
+
+    Returns:
+        JSON with status ('deleted'), store_id, promo_rule_id on success.
+    """
+    if (guard := _guard_write(action="delete promo rule", store_id=store_id, promo_rule_id=promo_rule_id)):
+        return guard
+    result = mc_request(
+        f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}",
+        method="DELETE",
+    )
+    if isinstance(result, dict) and "error" in result:
+        return json.dumps(result, indent=2)
+    return json.dumps({
+        "status": "deleted",
+        "store_id": store_id,
+        "promo_rule_id": promo_rule_id,
+    }, indent=2)
+
+
+# --- Read/Write Tools: E-commerce Promo Codes ---
+
+@mcp.tool()
+def list_promo_codes(store_id: str, promo_rule_id: str, count: int = 20, offset: int = 0) -> str:
+    """List the redeemable codes attached to a promo rule (e.g. 'SUMMER20', 'VIPONLY').
+
+    Codes are what customers type at checkout. They redeem the discount defined by the
+    rule. A single rule can have many codes (e.g. one per customer segment).
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        store_id: E-commerce store ID.
+        promo_rule_id: Rule ID. Obtain from list_promo_rules.
+        count: Number of codes to return (1-1000, default 20).
+        offset: Pagination offset.
+
+    Returns:
+        JSON with store_id, promo_rule_id, total_items, and promo_codes array. Each code:
+        id, code (the string customers type), redemption_url, usage_count, enabled,
+        created_at, updated_at.
+    """
+    data = mc_request(
+        f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}/promo-codes",
+        params={"count": count, "offset": offset},
+    )
+    codes = []
+    for c in data.get("promo_codes", []):
+        codes.append({
+            "id": c.get("id"),
+            "code": c.get("code"),
+            "redemption_url": c.get("redemption_url"),
+            "usage_count": c.get("usage_count"),
+            "enabled": c.get("enabled"),
+            "created_at": c.get("created_at"),
+            "updated_at": c.get("updated_at"),
+        })
+    return json.dumps({
+        "store_id": store_id,
+        "promo_rule_id": promo_rule_id,
+        "total_items": data.get("total_items"),
+        "promo_codes": codes,
+    }, indent=2)
+
+
+@mcp.tool()
+def get_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str) -> str:
+    """Retrieve a single promo code by ID with its current settings and usage stats.
+
+    Use to check a code's usage_count before a campaign, or confirm a code is enabled.
+    Use list_promo_codes to browse codes for a rule.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 if any of store_id, promo_rule_id, or promo_code_id is invalid.
+
+    Args:
+        store_id: E-commerce store ID.
+        promo_rule_id: Rule ID the code is attached to.
+        promo_code_id: Code ID to inspect.
+
+    Returns:
+        JSON with id, code, redemption_url, usage_count, enabled, created_at, updated_at.
+    """
+    data = mc_request(
+        f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}/promo-codes/{promo_code_id}"
+    )
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({
+        "id": data.get("id"),
+        "code": data.get("code"),
+        "redemption_url": data.get("redemption_url"),
+        "usage_count": data.get("usage_count"),
+        "enabled": data.get("enabled"),
+        "created_at": data.get("created_at"),
+        "updated_at": data.get("updated_at"),
+    }, indent=2)
+
+
+@mcp.tool()
+def create_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str, code: str, redemption_url: str, enabled: bool = True) -> str:
+    """Create a redeemable code under an existing promo rule.
+
+    Customers type the `code` string at checkout to apply the rule's discount. Code matching
+    is case-insensitive on the Mailchimp side. Use list_promo_codes to discover existing codes
+    before creating duplicates.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 400 if promo_rule_id does not exist; returns 409 if promo_code_id already exists.
+
+    Args:
+        store_id: E-commerce store ID.
+        promo_rule_id: Rule ID to attach the code to. Obtain from list_promo_rules.
+        promo_code_id: Client-supplied unique ID for the code.
+        code: The actual code string customers type at checkout (e.g. 'SUMMER20').
+        redemption_url: URL where the code can be applied (your checkout page).
+        enabled: Whether the code is active. Default true.
+
+    Returns:
+        JSON with id, code, redemption_url, usage_count (0 at creation), enabled, created_at.
+    """
+    if (guard := _guard_write(action="create promo code", store_id=store_id, promo_rule_id=promo_rule_id, code=code)):
+        return guard
+    body = {
+        "id": promo_code_id,
+        "code": code,
+        "redemption_url": redemption_url,
+        "enabled": enabled,
+    }
+    data = mc_request(
+        f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}/promo-codes",
+        body=body,
+        method="POST",
+    )
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({
+        "id": data.get("id"),
+        "code": data.get("code"),
+        "redemption_url": data.get("redemption_url"),
+        "usage_count": data.get("usage_count"),
+        "enabled": data.get("enabled"),
+        "created_at": data.get("created_at"),
+    }, indent=2)
+
+
+@mcp.tool()
+def update_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str, code: Optional[str] = None, redemption_url: Optional[str] = None, enabled: Optional[bool] = None) -> str:
+    """Update a promo code's string, redemption URL, or enabled state. Cannot move a code
+    to a different rule — delete and re-create instead.
+
+    Common use: toggle enabled=false to temporarily disable a code after a campaign ends,
+    without deleting the redemption history.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 if any of store_id, promo_rule_id, or promo_code_id is invalid.
+
+    Args:
+        store_id: E-commerce store ID.
+        promo_rule_id: Rule ID the code is attached to.
+        promo_code_id: Code ID to update.
+        code: New code string (case-insensitive).
+        redemption_url: New redemption URL.
+        enabled: Toggle the code on/off.
+
+    Returns:
+        JSON with id, code, redemption_url, enabled, updated_at.
+    """
+    if (guard := _guard_write(action="update promo code", store_id=store_id, promo_rule_id=promo_rule_id, promo_code_id=promo_code_id)):
+        return guard
+    body: dict = {}
+    if code is not None:
+        body["code"] = code
+    if redemption_url is not None:
+        body["redemption_url"] = redemption_url
+    if enabled is not None:
+        body["enabled"] = enabled
+    data = mc_request(
+        f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}/promo-codes/{promo_code_id}",
+        body=body,
+        method="PATCH",
+    )
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({
+        "id": data.get("id"),
+        "code": data.get("code"),
+        "redemption_url": data.get("redemption_url"),
+        "enabled": data.get("enabled"),
+        "updated_at": data.get("updated_at"),
+    }, indent=2)
+
+
+@mcp.tool()
+def delete_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str) -> str:
+    """Permanently delete a promo code. Past redemption history is lost. Irreversible.
+
+    Use update_promo_code with enabled=false to disable a code while preserving its
+    redemption stats. Use delete_promo_rule to remove the rule and all its codes at once.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 if any of store_id, promo_rule_id, or promo_code_id is invalid.
+
+    Args:
+        store_id: E-commerce store ID.
+        promo_rule_id: Rule ID the code is attached to.
+        promo_code_id: Code ID to delete.
+
+    Returns:
+        JSON with status ('deleted'), store_id, promo_rule_id, promo_code_id on success.
+    """
+    if (guard := _guard_write(action="delete promo code", store_id=store_id, promo_rule_id=promo_rule_id, promo_code_id=promo_code_id)):
+        return guard
+    result = mc_request(
+        f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}/promo-codes/{promo_code_id}",
+        method="DELETE",
+    )
+    if isinstance(result, dict) and "error" in result:
+        return json.dumps(result, indent=2)
+    return json.dumps({
+        "status": "deleted",
+        "store_id": store_id,
+        "promo_rule_id": promo_rule_id,
+        "promo_code_id": promo_code_id,
+    }, indent=2)
+
+
 # --- Read Tools: Campaign Folders ---
 
 @mcp.tool()
