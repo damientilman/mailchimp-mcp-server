@@ -423,3 +423,225 @@ class TestMemberNotesCRUD:
         assert payload == {"status": "deleted", "email_address": self.EMAIL, "note_id": "7"}
         assert calls[0]["method"] == "DELETE"
         assert calls[0]["endpoint"] == f"/lists/abc/members/{self.HASH}/notes/7"
+
+
+class TestEcommerceCartsCRUD:
+    def test_list_store_carts(self, mock_mc_request) -> None:
+        mock_mc_request(
+            {
+                "total_items": 1,
+                "carts": [
+                    {
+                        "id": "cart_1",
+                        "customer": {"id": "cust_1", "email_address": "a@b.com"},
+                        "currency_code": "EUR",
+                        "order_total": 49.99,
+                        "checkout_url": "https://shop.example/cart/cart_1",
+                        "created_at": "2026-05-16T00:00:00Z",
+                    }
+                ],
+            }
+        )
+        payload = json.loads(server.list_store_carts(store_id="store_a"))
+        assert payload["total_items"] == 1
+        assert payload["carts"][0]["currency_code"] == "EUR"
+
+    def test_get_store_cart(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {
+                "id": "cart_1",
+                "customer": {"id": "cust_1"},
+                "currency_code": "EUR",
+                "order_total": 49.99,
+                "lines": [{"id": "line_1", "product_id": "p_1", "quantity": 2, "price": 24.99}],
+            }
+        )
+        payload = json.loads(server.get_store_cart(store_id="store_a", cart_id="cart_1"))
+        assert payload["lines"][0]["quantity"] == 2
+        assert calls[0]["endpoint"] == "/ecommerce/stores/store_a/carts/cart_1"
+
+    def test_create_store_cart_parses_lines_json(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {"id": "cart_42", "customer": {"id": "cust_1"}, "currency_code": "EUR", "order_total": 19.99}
+        )
+        lines = json.dumps([{"id": "line_1", "product_id": "p_1", "quantity": 1, "price": 19.99}])
+        server.create_store_cart(
+            store_id="store_a",
+            cart_id="cart_42",
+            customer_id="cust_1",
+            currency_code="EUR",
+            order_total=19.99,
+            lines_json=lines,
+        )
+        body = calls[0]["body"]
+        assert body["id"] == "cart_42"
+        assert body["customer"] == {"id": "cust_1"}
+        assert body["lines"][0]["product_id"] == "p_1"
+        assert calls[0]["method"] == "POST"
+
+    def test_create_store_cart_rejects_invalid_lines_json(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"should": "not-be-called"})
+        result = server.create_store_cart(
+            store_id="store_a",
+            cart_id="cart_42",
+            customer_id="cust_1",
+            currency_code="EUR",
+            order_total=19.99,
+            lines_json="{not json",
+        )
+        payload = json.loads(result)
+        assert "Invalid lines_json" in payload["error"]
+        assert calls == []
+
+    def test_update_store_cart_only_sends_provided_fields(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"id": "cart_1", "order_total": 99.99})
+        server.update_store_cart(store_id="store_a", cart_id="cart_1", order_total=99.99)
+        body = calls[0]["body"]
+        assert body == {"order_total": 99.99}
+        assert calls[0]["method"] == "PATCH"
+
+    def test_delete_store_cart(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"status": "success"})
+        payload = json.loads(server.delete_store_cart(store_id="store_a", cart_id="cart_1"))
+        assert payload == {"status": "deleted", "store_id": "store_a", "cart_id": "cart_1"}
+        assert calls[0]["method"] == "DELETE"
+
+
+class TestEcommercePromoRulesCRUD:
+    def test_list_promo_rules(self, mock_mc_request) -> None:
+        mock_mc_request(
+            {
+                "total_items": 1,
+                "promo_rules": [
+                    {
+                        "id": "rule_1",
+                        "title": "Summer Sale",
+                        "description": "20% off",
+                        "amount": 20,
+                        "type": "percentage",
+                        "target": "total",
+                        "enabled": True,
+                    }
+                ],
+            }
+        )
+        payload = json.loads(server.list_promo_rules(store_id="store_a"))
+        assert payload["promo_rules"][0]["type"] == "percentage"
+
+    def test_get_promo_rule(self, mock_mc_request) -> None:
+        mock_mc_request({"id": "rule_1", "type": "percentage", "amount": 20, "enabled": True})
+        payload = json.loads(server.get_promo_rule(store_id="store_a", promo_rule_id="rule_1"))
+        assert payload["amount"] == 20
+
+    def test_create_promo_rule(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {
+                "id": "rule_42",
+                "description": "Summer 20%",
+                "amount": 20,
+                "type": "percentage",
+                "target": "total",
+                "enabled": True,
+                "created_at": "2026-05-16T00:00:00Z",
+            }
+        )
+        server.create_promo_rule(
+            store_id="store_a",
+            promo_rule_id="rule_42",
+            description="Summer 20%",
+            amount=20,
+            type="percentage",
+            target="total",
+            starts_at="2026-06-01T00:00:00Z",
+        )
+        body = calls[0]["body"]
+        assert body["id"] == "rule_42"
+        assert body["type"] == "percentage"
+        assert body["target"] == "total"
+        assert body["starts_at"] == "2026-06-01T00:00:00Z"
+        assert "ends_at" not in body
+        assert calls[0]["method"] == "POST"
+
+    def test_update_promo_rule_enabled_toggle(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"id": "rule_1", "enabled": False, "updated_at": "2026-05-17T00:00:00Z"})
+        server.update_promo_rule(store_id="store_a", promo_rule_id="rule_1", enabled=False)
+        body = calls[0]["body"]
+        assert body == {"enabled": False}
+        assert calls[0]["method"] == "PATCH"
+
+    def test_delete_promo_rule(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"status": "success"})
+        payload = json.loads(server.delete_promo_rule(store_id="store_a", promo_rule_id="rule_1"))
+        assert payload["status"] == "deleted"
+        assert calls[0]["method"] == "DELETE"
+
+
+class TestEcommercePromoCodesCRUD:
+    def test_list_promo_codes(self, mock_mc_request) -> None:
+        mock_mc_request(
+            {
+                "total_items": 1,
+                "promo_codes": [
+                    {
+                        "id": "code_1",
+                        "code": "SUMMER20",
+                        "redemption_url": "https://shop.example/checkout",
+                        "usage_count": 12,
+                        "enabled": True,
+                    }
+                ],
+            }
+        )
+        payload = json.loads(
+            server.list_promo_codes(store_id="store_a", promo_rule_id="rule_1")
+        )
+        assert payload["promo_codes"][0]["code"] == "SUMMER20"
+        assert payload["promo_codes"][0]["usage_count"] == 12
+
+    def test_get_promo_code(self, mock_mc_request) -> None:
+        mock_mc_request({"id": "code_1", "code": "SUMMER20", "usage_count": 12, "enabled": True})
+        payload = json.loads(
+            server.get_promo_code(store_id="store_a", promo_rule_id="rule_1", promo_code_id="code_1")
+        )
+        assert payload["code"] == "SUMMER20"
+
+    def test_create_promo_code(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {
+                "id": "code_42",
+                "code": "VIP25",
+                "redemption_url": "https://shop.example/checkout",
+                "usage_count": 0,
+                "enabled": True,
+                "created_at": "2026-05-16T00:00:00Z",
+            }
+        )
+        server.create_promo_code(
+            store_id="store_a",
+            promo_rule_id="rule_1",
+            promo_code_id="code_42",
+            code="VIP25",
+            redemption_url="https://shop.example/checkout",
+        )
+        body = calls[0]["body"]
+        assert body["id"] == "code_42"
+        assert body["code"] == "VIP25"
+        assert body["enabled"] is True
+        assert calls[0]["endpoint"] == "/ecommerce/stores/store_a/promo-rules/rule_1/promo-codes"
+
+    def test_update_promo_code_disable(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"id": "code_1", "enabled": False})
+        server.update_promo_code(
+            store_id="store_a", promo_rule_id="rule_1", promo_code_id="code_1", enabled=False
+        )
+        assert calls[0]["body"] == {"enabled": False}
+        assert calls[0]["method"] == "PATCH"
+
+    def test_delete_promo_code(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"status": "success"})
+        payload = json.loads(
+            server.delete_promo_code(store_id="store_a", promo_rule_id="rule_1", promo_code_id="code_1")
+        )
+        assert payload["status"] == "deleted"
+        assert payload["promo_code_id"] == "code_1"
+        assert calls[0]["method"] == "DELETE"

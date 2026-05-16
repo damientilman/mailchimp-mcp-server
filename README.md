@@ -7,7 +7,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io)
 
-The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **97 tools** to query and manage your Mailchimp account from any MCP-compatible client, with A/B campaign support, geographic reporting, full landing-page lifecycle, CRM-style member notes, and read-only / dry-run safety modes.
+The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **112 tools** to query and manage your Mailchimp account from any MCP-compatible client, with A/B campaign support, geographic reporting, full landing-page lifecycle, CRM-style member notes, e-commerce carts and promo codes, and read-only / dry-run safety modes.
 
 Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api/) via [`requests`](https://pypi.org/project/requests/). Not based on the official [mailchimp-marketing-python](https://github.com/mailchimp/mailchimp-marketing-python) client. I hit too many issues with it so I went with raw HTTP calls instead.
 
@@ -47,6 +47,7 @@ Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api
 - **Webhooks** - Create and delete webhooks
 - **Templates** - Create, update, and delete email templates
 - **Automations** - Pause and start automation workflows
+- **E-commerce** - Cart lifecycle, promo rules, and promo codes for discount workflows
 - **Batch** - Run bulk API operations in a single request
 
 ## Prerequisites
@@ -346,6 +347,31 @@ Replace `mcp-cli` with your client's binary name. For read-only mode, add
 | `list_store_orders` | List orders from a store |
 | `list_store_products` | List products from a store |
 | `list_store_customers` | List customers from a store |
+
+### E-commerce Carts
+
+| Tool | Description |
+|---|---|
+| `list_store_carts` | List carts (including abandoned) for a store |
+| `get_store_cart` | Get a single cart with full line items |
+| `create_store_cart` | Push a cart (e.g. an abandoned cart from an external system) |
+| `update_store_cart` | Update a cart's totals, currency, checkout URL, or line items |
+| `delete_store_cart` | Permanently delete a cart |
+
+### E-commerce Promo Rules & Codes
+
+| Tool | Description |
+|---|---|
+| `list_promo_rules` | List discount rules for a store |
+| `get_promo_rule` | Get a single promo rule's configuration |
+| `create_promo_rule` | Create a discount rule (fixed amount, percentage, free shipping) |
+| `update_promo_rule` | Update a rule's amount, target, dates, or enabled state |
+| `delete_promo_rule` | Permanently delete a rule and all its codes |
+| `list_promo_codes` | List redeemable codes attached to a rule |
+| `get_promo_code` | Get a single promo code with usage stats |
+| `create_promo_code` | Create a redeemable code (e.g. 'SUMMER20') under a rule |
+| `update_promo_code` | Update a code's string, redemption URL, or enabled state |
+| `delete_promo_code` | Permanently delete a promo code |
 
 ### Batch Operations
 
