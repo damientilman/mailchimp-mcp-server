@@ -303,3 +303,123 @@ class TestReportsExtras:
         assert payload["eepurl"] == "http://eepurl.com/xyz"
         assert payload["twitter"]["impressions"] == 5000
         assert payload["referrers"][0]["referrer"] == "t.co"
+
+
+class TestTemplatesMetadata:
+    def test_get_template(self, mock_mc_request) -> None:
+        mock_mc_request(
+            {
+                "id": 42,
+                "name": "Welcome Series",
+                "type": "user",
+                "drag_and_drop": True,
+                "date_created": "2026-01-01T00:00:00Z",
+                "date_edited": "2026-02-01T00:00:00Z",
+                "active": True,
+                "thumbnail": "https://example.com/t.png",
+                "share_url": "https://us1.admin.mailchimp.com/...",
+            }
+        )
+        payload = json.loads(server.get_template(template_id="42"))
+        assert payload["id"] == 42
+        assert payload["name"] == "Welcome Series"
+        assert payload["type"] == "user"
+        assert payload["drag_and_drop"] is True
+
+
+class TestLandingPageCRUD:
+    def test_create_landing_page_sends_template_id_as_int(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {
+                "id": "page_1",
+                "name": "Promo Page",
+                "title": "Spring promo",
+                "status": "unpublished",
+                "url": None,
+                "created_at": "2026-05-16T00:00:00Z",
+                "list_id": "abc",
+            }
+        )
+        server.create_landing_page(
+            name="Promo Page",
+            title="Spring promo",
+            list_id="abc",
+            template_id="42",
+        )
+        body = calls[0]["body"]
+        assert body["name"] == "Promo Page"
+        assert body["list_id"] == "abc"
+        assert body["template"] == {"id": 42}
+        assert body["tracking"] == {"opens": True, "clicks": True}
+        assert calls[0]["method"] == "POST"
+
+    def test_update_landing_page_only_sends_provided_fields(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"id": "page_1", "name": "X", "status": "unpublished"})
+        server.update_landing_page(page_id="page_1", title="New title", tracking_clicks=False)
+        body = calls[0]["body"]
+        assert "name" not in body
+        assert body["title"] == "New title"
+        assert body["tracking"] == {"clicks": False}
+        assert calls[0]["method"] == "PATCH"
+
+    def test_delete_landing_page(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"status": "success"})
+        result = server.delete_landing_page(page_id="page_1")
+        payload = json.loads(result)
+        assert payload == {"status": "deleted", "page_id": "page_1"}
+        assert calls[0]["method"] == "DELETE"
+        assert calls[0]["endpoint"] == "/landing-pages/page_1"
+
+    def test_publish_landing_page(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"status": "success"})
+        payload = json.loads(server.publish_landing_page(page_id="page_1"))
+        assert payload == {"status": "published", "page_id": "page_1"}
+        assert calls[0]["endpoint"] == "/landing-pages/page_1/actions/publish"
+        assert calls[0]["method"] == "POST"
+
+    def test_unpublish_landing_page(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"status": "success"})
+        payload = json.loads(server.unpublish_landing_page(page_id="page_1"))
+        assert payload == {"status": "unpublished", "page_id": "page_1"}
+        assert calls[0]["endpoint"] == "/landing-pages/page_1/actions/unpublish"
+
+
+class TestMemberNotesCRUD:
+    EMAIL = "jane@example.com"
+    # MD5("jane@example.com") computed once for assertions below.
+    HASH = "9e26471d35a78862c17e467d87cddedf"
+
+    def test_list_member_notes_uses_md5_hash(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {"total_items": 1, "notes": [{"id": 7, "note": "Asked for discount", "created_at": "2026-05-16T00:00:00Z"}]}
+        )
+        payload = json.loads(server.list_member_notes(list_id="abc", email_address=self.EMAIL))
+        assert payload["total_items"] == 1
+        assert payload["notes"][0]["id"] == 7
+        assert calls[0]["endpoint"] == f"/lists/abc/members/{self.HASH}/notes"
+
+    def test_add_member_note(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {"id": 7, "note": "VIP customer", "created_at": "2026-05-16T00:00:00Z", "created_by": "Damien"}
+        )
+        result = server.add_member_note(list_id="abc", email_address=self.EMAIL, note="VIP customer")
+        payload = json.loads(result)
+        assert payload["id"] == 7
+        assert payload["email_address"] == self.EMAIL
+        assert calls[0]["method"] == "POST"
+        assert calls[0]["body"] == {"note": "VIP customer"}
+        assert calls[0]["endpoint"] == f"/lists/abc/members/{self.HASH}/notes"
+
+    def test_update_member_note(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"id": 7, "note": "Updated", "updated_at": "2026-05-17T00:00:00Z"})
+        server.update_member_note(list_id="abc", email_address=self.EMAIL, note_id="7", note="Updated")
+        assert calls[0]["method"] == "PATCH"
+        assert calls[0]["endpoint"] == f"/lists/abc/members/{self.HASH}/notes/7"
+        assert calls[0]["body"] == {"note": "Updated"}
+
+    def test_delete_member_note(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"status": "success"})
+        payload = json.loads(server.delete_member_note(list_id="abc", email_address=self.EMAIL, note_id="7"))
+        assert payload == {"status": "deleted", "email_address": self.EMAIL, "note_id": "7"}
+        assert calls[0]["method"] == "DELETE"
+        assert calls[0]["endpoint"] == f"/lists/abc/members/{self.HASH}/notes/7"
