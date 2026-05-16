@@ -7,7 +7,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io)
 
-The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **82 tools** to query and manage your Mailchimp account directly from Claude, with read-only and dry-run safety modes.
+The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **82 tools** to query and manage your Mailchimp account from any MCP-compatible client, with read-only and dry-run safety modes.
 
 Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api/) via [`requests`](https://pypi.org/project/requests/). Not based on the official [mailchimp-marketing-python](https://github.com/mailchimp/mailchimp-marketing-python) client. I hit too many issues with it so I went with raw HTTP calls instead.
 
@@ -102,11 +102,11 @@ The datacenter (`us8`, `us21`, etc.) is automatically extracted from the key.
 
 **Dry-run mode** — When `MAILCHIMP_DRY_RUN=true`, write tools return a preview of the action they *would* perform (tool name, target resource, parameters) without making any API call. Useful for testing prompts before going live.
 
-### Claude Desktop
+### MCP client configuration
 
-Add this to your `claude_desktop_config.json`:
-
-> **Windows (Microsoft Store)**: If Claude Desktop was installed via the Microsoft Store, the config file is located at `C:\Users\<user>\AppData\Local\Packages\Claude_<id>\LocalCache\Roaming\Claude\claude_desktop_config.json` instead of the usual `%APPDATA%\Claude\` path.
+Most MCP clients accept a JSON configuration block describing how to launch the server.
+Configure yours to invoke `uvx mailchimp-mcp` (or `mailchimp-mcp` if installed via pip)
+with `MAILCHIMP_API_KEY` exported in the environment.
 
 <details>
 <summary>Using uvx (recommended)</summary>
@@ -162,24 +162,18 @@ Add this to your `claude_desktop_config.json`:
 ```
 </details>
 
-### Claude Code
+### CLI-based clients
+
+If your MCP client provides a CLI to register servers, the equivalent invocation is:
 
 ```bash
-claude mcp add mailchimp \
-  -s user \
+mcp-cli add mailchimp \
   -e MAILCHIMP_API_KEY=your-api-key-here \
   -- uvx mailchimp-mcp
 ```
 
-For read-only mode:
-
-```bash
-claude mcp add mailchimp \
-  -s user \
-  -e MAILCHIMP_API_KEY=your-api-key-here \
-  -e MAILCHIMP_READ_ONLY=true \
-  -- uvx mailchimp-mcp
-```
+Replace `mcp-cli` with your client's binary name. For read-only mode, add
+`-e MAILCHIMP_READ_ONLY=true` to the command.
 
 ## Available Tools
 
@@ -348,7 +342,7 @@ claude mcp add mailchimp \
 
 ## Example Prompts
 
-Once connected, you can ask Claude things like:
+Once connected, you can ask your MCP client to perform requests like:
 
 - *"Show me all my sent campaigns from the last 3 months"*
 - *"What was the open rate and click rate for my last newsletter?"*

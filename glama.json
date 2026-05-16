@@ -14,7 +14,7 @@
   "homepage": "https://github.com/damientilman/mailchimp-mcp-server",
   "license": "MIT",
   "categories": ["Marketing", "Email", "Developer Tools"],
-  "keywords": ["mailchimp", "email-marketing", "campaigns", "audiences", "mcp", "claude", "model-context-protocol"],
+  "keywords": ["mailchimp", "email-marketing", "campaigns", "audiences", "mcp", "model-context-protocol", "marketing-automation"],
   "capabilities": {
     "tools": true,
     "prompts": false,
