@@ -901,22 +901,125 @@ def update_audience(list_id: str, name: Optional[str] = None, from_name: Optiona
     }, indent=2)
 
 
+@mcp.tool()
+def create_audience(name: str, from_name: str, from_email: str, subject: str, language: str, company: str, address1: str, city: str, state: str, zip: str, country: str, permission_reminder: str, email_type_option: bool = False, address2: Optional[str] = None, phone: Optional[str] = None) -> str:
+    """Create a new audience (list) with required contact info, campaign defaults, and permission reminder.
+
+    Side effect: creates a billable audience under the Mailchimp plan. Mailchimp requires all
+    contact fields (company, address, city, state, zip, country) and CAN-SPAM-compliant permission
+    reminder text. Use update_audience to modify later, delete_audience for cleanup, or
+    list_audiences to verify creation.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 400 error if any required field is missing or the plan audience limit is reached.
+
+    Args:
+        name: Audience display name shown in dashboard and audience picker (max 100 chars).
+        from_name: Default sender name on campaigns (e.g. 'Marketing Team'). Max 100 chars.
+        from_email: Default sender email. Must be on a verified sending domain.
+        subject: Default subject line for new campaigns. Max 150 chars.
+        language: Default language code (e.g. 'en', 'fr', 'es'). ISO 639-1 two-letter code.
+        company: Legal company name displayed in email footer (required by CAN-SPAM).
+        address1: Primary postal address line shown in email footer.
+        city: City of the postal address.
+        state: State or region of the postal address.
+        zip: Postal/ZIP code.
+        country: Two-letter ISO country code (e.g. 'US', 'FR', 'GB').
+        permission_reminder: Sentence shown at the bottom of every email explaining why
+            subscribers receive it (required by CAN-SPAM).
+        email_type_option: If true, lets subscribers choose plaintext vs. HTML emails. Default false.
+        address2: Optional secondary postal address line.
+        phone: Optional contact phone number shown in the footer.
+
+    Returns:
+        JSON with id (new list_id, save for subsequent calls), name, member_count (0 at creation),
+        date_created, subscribe_url_short.
+    """
+    if (guard := _guard_write(action="create audience", name=name, from_email=from_email)):
+        return guard
+    contact: dict = {
+        "company": company,
+        "address1": address1,
+        "city": city,
+        "state": state,
+        "zip": zip,
+        "country": country,
+    }
+    if address2:
+        contact["address2"] = address2
+    if phone:
+        contact["phone"] = phone
+    body = {
+        "name": name,
+        "contact": contact,
+        "permission_reminder": permission_reminder,
+        "campaign_defaults": {
+            "from_name": from_name,
+            "from_email": from_email,
+            "subject": subject,
+            "language": language,
+        },
+        "email_type_option": email_type_option,
+    }
+    data = mc_request("/lists", body=body, method="POST")
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "member_count": data.get("stats", {}).get("member_count", 0),
+        "date_created": data.get("date_created"),
+        "subscribe_url_short": data.get("subscribe_url_short"),
+    }, indent=2)
+
+
+@mcp.tool()
+def delete_audience(list_id: str) -> str:
+    """Permanently delete an audience and all its members, segments, campaigns, and stats. Irreversible.
+
+    Side effect: removes every member of the audience and all historical data tied to it.
+    Cannot be undone via the API. Use update_audience to rename or archive-like changes instead.
+    Use list_audience_members to back up members first if needed.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 error if list_id does not exist.
+
+    Args:
+        list_id: Audience/list ID to delete (10-char alphanumeric, e.g. 'abc123def4').
+            Obtain from list_audiences. Double-check before calling — deletion is permanent.
+
+    Returns:
+        JSON with status ('deleted') and list_id on success, or error object on failure.
+    """
+    if (guard := _guard_write(action="delete audience", list_id=list_id)):
+        return guard
+    result = mc_request(f"/lists/{list_id}", method="DELETE")
+    if isinstance(result, dict) and "error" in result:
+        return json.dumps(result, indent=2)
+    return json.dumps({"status": "deleted", "list_id": list_id}, indent=2)
+
+
 # --- Write Tools: Campaigns ---
 
 @mcp.tool()
-def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None, preview_text: Optional[str] = None, from_name: Optional[str] = None, reply_to: Optional[str] = None, segment_id: Optional[str] = None) -> str:
-    """Create a new regular email campaign in draft status, optionally targeting a specific segment.
+def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None, preview_text: Optional[str] = None, from_name: Optional[str] = None, reply_to: Optional[str] = None, segment_id: Optional[str] = None, campaign_type: str = "regular", variate_settings_json: Optional[str] = None) -> str:
+    """Create a new email campaign in draft status, with optional segment targeting or A/B variate testing.
 
     Typical workflow: create_campaign -> set_campaign_content (add HTML body) -> send_test_email
     (preview) -> send_campaign or schedule_campaign (deliver). The campaign is created in 'save'
     (draft) status and cannot be sent until content is set. Use replicate_campaign instead to
     clone an existing campaign.
 
+    For A/B testing, set campaign_type='variate' and pass variate_settings_json describing the
+    test. Mailchimp will send variants to a sample of recipients, then auto-pick a winner based
+    on winner_criteria and send it to the remaining audience after wait_time.
+
     Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Respects read-only and dry-run modes.
 
     Args:
         list_id: The audience/list ID to send to (e.g. 'abc123def4'). Obtain from list_audiences.
         subject_line: Subject line recipients see in their inbox. Keep under 150 chars.
+            For variate campaigns testing subject lines, this is the default/fallback.
         title: Internal title for organizing in Mailchimp dashboard. Defaults to subject_line
             if omitted.
         preview_text: Preheader text shown after the subject line in inbox. Keep under 200 chars.
@@ -924,17 +1027,30 @@ def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None
         reply_to: Reply-to email address. Must be a verified domain. Falls back to audience default.
         segment_id: Saved segment ID to restrict recipients. Only members matching this segment
             receive the email. Obtain from list_segments. Omit to send to the full audience.
+        campaign_type: 'regular' (default) for a standard campaign, or 'variate' for an A/B test.
+            'plaintext', 'rss', and 'absplit' (legacy A/B) are also accepted but rarely used.
+        variate_settings_json: Required when campaign_type='variate'. JSON string with keys:
+            winner_criteria ('opens' | 'clicks' | 'manual' | 'total_revenue'), test_size (10-100,
+            percent of audience sampled), wait_time (minutes before picking winner), and one of
+            subject_lines (list of 2-8 strings), from_names (list of 2-8), reply_to_addresses
+            (list of 2-8), send_times (list of 2-8 ISO datetimes), or contents (list of 2-8
+            HTML strings). Example:
+            '{"winner_criteria": "opens", "test_size": 20, "wait_time": 1440,
+              "subject_lines": ["Spring Sale 20% off", "Last chance: 20% off Spring"]}'
 
     Returns:
         JSON with fields: id (string, the new campaign ID for use with set_campaign_content,
         send_campaign, etc.), status ('save'), title, subject_line, web_id (int, for Mailchimp
-        web UI link). Returns error if list_id is invalid.
+        web UI link), type. Returns error if list_id is invalid, variate_settings_json is
+        malformed, or variate settings violate Mailchimp constraints.
 
     Example:
-        create_campaign(list_id="abc123", subject_line="Spring Sale", preview_text="20% off everything") -> {"id": "def456", "status": "save", "title": "Spring Sale", ...}
+        create_campaign(list_id="abc123", subject_line="Spring Sale", preview_text="20% off") -> {"id": "def456", "status": "save", "type": "regular", ...}
     """
-    if (guard := _guard_write(action="create campaign draft", list_id=list_id, subject_line=subject_line)):
+    if (guard := _guard_write(action="create campaign draft", list_id=list_id, subject_line=subject_line, campaign_type=campaign_type)):
         return guard
+    if campaign_type == "variate" and not variate_settings_json:
+        return json.dumps({"error": "variate_settings_json is required when campaign_type='variate'"}, indent=2)
     settings: dict = {"subject_line": subject_line, "title": title or subject_line}
     if preview_text:
         settings["preview_text"] = preview_text
@@ -945,15 +1061,23 @@ def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None
     recipients: dict = {"list_id": list_id}
     if segment_id:
         recipients["segment_opts"] = {"saved_segment_id": int(segment_id)}
-    body = {
-        "type": "regular",
+    body: dict = {
+        "type": campaign_type,
         "recipients": recipients,
         "settings": settings,
     }
+    if variate_settings_json:
+        try:
+            body["variate_settings"] = json.loads(variate_settings_json)
+        except json.JSONDecodeError as e:
+            return json.dumps({"error": f"Invalid variate_settings_json: {e}"}, indent=2)
     data = mc_request("/campaigns", body=body, method="POST")
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "status": data.get("status"),
+        "type": data.get("type"),
         "title": data.get("settings", {}).get("title"),
         "subject_line": data.get("settings", {}).get("subject_line"),
         "web_id": data.get("web_id"),
@@ -2079,6 +2203,91 @@ def get_domain_performance(campaign_id: str) -> str:
             "unsubs": d.get("unsubs"),
         })
     return json.dumps({"total_items": data.get("total_items"), "domains": domains}, indent=2)
+
+
+@mcp.tool()
+def get_campaign_advice(campaign_id: str) -> str:
+    """Retrieve Mailchimp's automated post-send feedback on a campaign (subject line, content, engagement tips).
+
+    Use to surface algorithmic suggestions Mailchimp makes after looking at how a campaign
+    performed (e.g. 'your open rate is below industry average, try shorter subject lines').
+    Use get_campaign_report for raw metrics. Only works for sent campaigns.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 error if campaign_id is invalid. Returns an empty advice array if Mailchimp
+    has no suggestions for the campaign.
+
+    Args:
+        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+
+    Returns:
+        JSON with total_items and advice array. Each entry: type ('positive' | 'negative' |
+        'neutral'), message (string, the advice text).
+    """
+    data = mc_request(f"/reports/{campaign_id}/advice")
+    advice = []
+    for a in data.get("advice", []):
+        advice.append({"type": a.get("type"), "message": a.get("message")})
+    return json.dumps({"total_items": data.get("total_items"), "advice": advice}, indent=2)
+
+
+@mcp.tool()
+def get_campaign_locations(campaign_id: str, count: int = 20, offset: int = 0) -> str:
+    """Retrieve geographic open data for a sent campaign, broken down by country and region.
+
+    Use to map where opens happened — useful for region-targeted follow-ups, timezone-aware
+    sending, or audit reports. Aggregated from IP geolocation at open time. Use
+    get_domain_performance for per-provider stats instead. Only works for sent campaigns.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        count: Number of locations to return (1-1000, default 20).
+        offset: Pagination offset. Use when total_items exceeds count.
+
+    Returns:
+        JSON with total_items and locations array. Each entry: country_code (ISO 2-letter,
+        e.g. 'US'), region (string, state/province name or code), region_name (full name),
+        opens (int, opens from that region).
+    """
+    data = mc_request(f"/reports/{campaign_id}/locations", params={"count": count, "offset": offset})
+    locations = []
+    for loc in data.get("locations", []):
+        locations.append({
+            "country_code": loc.get("country_code"),
+            "region": loc.get("region"),
+            "region_name": loc.get("region_name"),
+            "opens": loc.get("opens"),
+        })
+    return json.dumps({"total_items": data.get("total_items"), "locations": locations}, indent=2)
+
+
+@mcp.tool()
+def get_eepurl_activity(campaign_id: str) -> str:
+    """Retrieve social sharing stats for a campaign's eepurl (Mailchimp's short-URL share link).
+
+    Use to measure how much the campaign was shared on Twitter/Facebook/etc. via the
+    'Share this' link Mailchimp generates. Use get_campaign_click_details for in-email link
+    clicks instead. Only works for sent campaigns where eepurl tracking is enabled.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+
+    Returns:
+        JSON with eepurl (the short URL), twitter (object with statuses, first_status,
+        last_status, replies, impressions, retweets), facebook (object with likes, recipient_likes,
+        unique_likes), referrers array (list of {referrer, clicks, first_click, last_click}).
+    """
+    data = mc_request(f"/reports/{campaign_id}/eepurl")
+    return json.dumps({
+        "eepurl": data.get("eepurl"),
+        "twitter": data.get("twitter"),
+        "facebook": data.get("facebook"),
+        "referrers": data.get("clicks", {}).get("referrer_clicks", []),
+    }, indent=2)
 
 
 @mcp.tool()
