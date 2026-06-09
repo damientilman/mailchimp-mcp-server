@@ -424,11 +424,14 @@ def get_audience_growth_history(list_id: str, count: int = 12) -> str:
 
 @mcp.tool()
 def list_automations(count: int = 20, offset: int = 0) -> str:
-    """List automation workflows in the account with status and send counts.
+    """List Classic Automation workflows in the account with status and send counts.
 
-    Returns all automations regardless of status (sending, paused, draft), ordered by creation
-    date descending. Includes both Classic Automations and Customer Journeys. Use
-    get_automation_emails for individual emails within a workflow.
+    Returns Classic Automations only — ordered by creation date descending. Customer Journeys
+    are NOT returned (Mailchimp does not expose a public read endpoint for journeys; only the
+    journey-step trigger endpoint is public). To see what your Customer Journeys are sending,
+    use search_automation_campaigns instead (it lists every campaign emitted by either system).
+    Use get_automation_emails for individual emails within a Classic workflow. Use
+    get_automation_summary for a counted overview combining both systems.
 
     Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
@@ -453,6 +456,77 @@ def list_automations(count: int = 20, offset: int = 0) -> str:
             "list_id": a.get("recipients", {}).get("list_id"),
         })
     return json.dumps({"total_items": data.get("total_items"), "automations": automations}, indent=2)
+
+
+@mcp.tool()
+def get_automation_summary(days: int = 30) -> str:
+    """Summarise automation activity across Classic Automations and Customer Journeys.
+
+    Combines two API calls into a single overview useful for audits and dashboards:
+    1. /automations to count Classic workflows by status (sending / paused / draft)
+    2. /campaigns?type=automation&since_send_time=N days ago to count and sum what
+       automations have actually sent recently (both Classic and Customer Journey emails
+       show up as type='automation' campaigns)
+
+    This is the recommended starting point for "what's my automation stack doing right now?"
+    questions during an account audit. Use list_automations for the raw Classic list. Use
+    search_automation_campaigns for the raw recent automation campaign feed.
+
+    Authenticated via API key. Max 10 concurrent requests (2 are issued by this tool).
+    Read-only, safe to retry.
+
+    Args:
+        days: Lookback window in days for the recent-sends portion (1-365, default 30).
+
+    Returns:
+        JSON with two sections:
+        - classic_automations: total, by_status ({sending, paused, draft, ...})
+        - recent_automation_campaigns: window_days, total_campaigns, total_emails_sent,
+          top_titles (up to 5 titles ordered by emails_sent desc)
+    """
+    automations_data = mc_request("/automations", params={"count": 1000})
+    by_status: dict = {}
+    classic_total = 0
+    if isinstance(automations_data, dict) and "error" not in automations_data:
+        for a in automations_data.get("automations", []):
+            classic_total += 1
+            status = a.get("status") or "unknown"
+            by_status[status] = by_status.get(status, 0) + 1
+
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    campaigns_data = mc_request(
+        "/campaigns",
+        params={"count": 1000, "type": "automation", "since_send_time": since},
+    )
+    recent_campaigns: list = []
+    recent_emails_sent = 0
+    if isinstance(campaigns_data, dict) and "error" not in campaigns_data:
+        for c in campaigns_data.get("campaigns", []):
+            sent = c.get("emails_sent") or 0
+            recent_emails_sent += sent
+            recent_campaigns.append({
+                "title": c.get("settings", {}).get("title"),
+                "emails_sent": sent,
+            })
+    recent_campaigns.sort(key=lambda c: c.get("emails_sent") or 0, reverse=True)
+    top_titles = [
+        {"title": c["title"], "emails_sent": c["emails_sent"]}
+        for c in recent_campaigns[:5]
+    ]
+
+    return json.dumps({
+        "classic_automations": {
+            "total": classic_total,
+            "by_status": by_status,
+        },
+        "recent_automation_campaigns": {
+            "window_days": days,
+            "total_campaigns": len(recent_campaigns),
+            "total_emails_sent": recent_emails_sent,
+            "top_titles": top_titles,
+        },
+    }, indent=2)
 
 
 @mcp.tool()
@@ -2481,6 +2555,58 @@ def get_member_events(list_id: str, email_address: str, count: int = 20) -> str:
     return json.dumps({"email_address": email_address, "total_items": data.get("total_items"), "events": events}, indent=2)
 
 
+@mcp.tool()
+def get_member_journey_events(list_id: str, email_address: str, count: int = 50) -> str:
+    """Retrieve a member's activity events filtered to automation- and journey-related actions.
+
+    Returns the subset of the member's activity feed that relates to Classic Automations and
+    (where Mailchimp surfaces them) Customer Journey emails. Useful to answer "what automation
+    or journey emails has this contact received?" without scanning their full activity.
+
+    Note: Mailchimp does not expose a public read API for Customer Journeys themselves. Journey
+    emails do appear in the activity feed as automation-typed actions, so this tool surfaces them
+    via that side-channel rather than reading the journey graph directly. Use trigger_customer_journey
+    to enroll a contact into a specific journey step (the only journey write available via API).
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        list_id: Audience/list ID (10-char alphanumeric). Obtain from list_audiences.
+        email_address: Email of the member. Must exist in the audience.
+        count: Number of activity rows to scan before filtering (1-1000, default 50). Raise if
+            the member is highly active and you suspect automation events are missed.
+
+    Returns:
+        JSON with email_address, scanned (raw row count looked at), total_journey_events (after
+        filtering), and events array. Each event: action (raw action type), timestamp, title
+        (campaign / automation title if present), url (link clicked if any), campaign_id.
+    """
+    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    data = mc_request(
+        f"/lists/{list_id}/members/{subscriber_hash}/activity-feed",
+        params={"count": count},
+    )
+    automation_keywords = ("automation", "journey")
+    filtered = []
+    raw_activity = data.get("activity", [])
+    for a in raw_activity:
+        action = (a.get("action") or "").lower()
+        if any(k in action for k in automation_keywords):
+            filtered.append({
+                "action": a.get("action"),
+                "timestamp": a.get("timestamp"),
+                "title": a.get("title"),
+                "url": a.get("url"),
+                "campaign_id": a.get("campaign_id"),
+            })
+    return json.dumps({
+        "email_address": email_address,
+        "scanned": len(raw_activity),
+        "total_journey_events": len(filtered),
+        "events": filtered,
+    }, indent=2)
+
+
 # --- Read/Write Tools: Member Notes ---
 
 @mcp.tool()
@@ -3964,6 +4090,61 @@ def search_campaigns(query: str, count: int = 20, offset: int = 0) -> str:
             }
         })
     return json.dumps({"total_items": data.get("total_items"), "results": results}, indent=2)
+
+
+@mcp.tool()
+def search_automation_campaigns(count: int = 20, offset: int = 0, list_id: Optional[str] = None, status: Optional[str] = None, since_send_time: Optional[str] = None, before_send_time: Optional[str] = None) -> str:
+    """List campaigns originated by an automation or a Customer Journey (campaign type='automation').
+
+    Every email Mailchimp sends from a Classic automation or a Customer Journey creates a
+    campaign object with type='automation'. This tool filters /campaigns to surface only those,
+    so you can answer "what did my automations send recently?" without scanning all campaigns.
+
+    Use this as the most practical workaround for the lack of a public Customer Journeys read
+    API: while you can't list the journeys themselves, you can list the campaigns they emit.
+    Use list_automations for Classic-only metadata (journey internals aren't exposed). Use
+    list_campaigns for the full campaign feed.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        count: Number of campaigns to return (1-1000, default 20).
+        offset: Pagination offset. Use when total_items exceeds count.
+        list_id: Optional audience ID to restrict to a single audience. Obtain from list_audiences.
+        status: Filter by campaign status. Valid values: 'save', 'paused', 'schedule', 'sending',
+            'sent'. Omit for all.
+        since_send_time: Only return campaigns sent after this ISO 8601 datetime (e.g.
+            '2026-04-01T00:00:00Z').
+        before_send_time: Only return campaigns sent before this ISO 8601 datetime.
+
+    Returns:
+        JSON with total_items and campaigns array. Each campaign: id, status, title, subject_line,
+        send_time, emails_sent, list_id, list_name. Useful to compute automation send volume and
+        identify which automation/journey produced which email (via title patterns).
+    """
+    params: dict = {"count": count, "offset": offset, "type": "automation"}
+    if list_id:
+        params["list_id"] = list_id
+    if status:
+        params["status"] = status
+    if since_send_time:
+        params["since_send_time"] = since_send_time
+    if before_send_time:
+        params["before_send_time"] = before_send_time
+    data = mc_request("/campaigns", params=params)
+    campaigns = []
+    for c in data.get("campaigns", []):
+        campaigns.append({
+            "id": c.get("id"),
+            "status": c.get("status"),
+            "title": c.get("settings", {}).get("title"),
+            "subject_line": c.get("settings", {}).get("subject_line"),
+            "send_time": c.get("send_time"),
+            "emails_sent": c.get("emails_sent"),
+            "list_id": c.get("recipients", {}).get("list_id"),
+            "list_name": c.get("recipients", {}).get("list_name"),
+        })
+    return json.dumps({"total_items": data.get("total_items"), "campaigns": campaigns}, indent=2)
 
 
 @mcp.tool()
