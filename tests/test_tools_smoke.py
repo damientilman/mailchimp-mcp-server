@@ -645,3 +645,106 @@ class TestEcommercePromoCodesCRUD:
         assert payload["status"] == "deleted"
         assert payload["promo_code_id"] == "code_1"
         assert calls[0]["method"] == "DELETE"
+
+
+class TestAutomationCoverage:
+    EMAIL = "jane@example.com"
+    HASH = "9e26471d35a78862c17e467d87cddedf"
+
+    def test_search_automation_campaigns_forces_type_filter(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"total_items": 0, "campaigns": []})
+        server.search_automation_campaigns(count=50)
+        params = calls[0]["params"]
+        assert params["type"] == "automation"
+        assert params["count"] == 50
+        assert "list_id" not in params
+        assert "since_send_time" not in params
+
+    def test_search_automation_campaigns_threads_optional_filters(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {
+                "total_items": 1,
+                "campaigns": [
+                    {
+                        "id": "cam_1",
+                        "status": "sent",
+                        "settings": {"title": "Welcome day 1", "subject_line": "Welcome"},
+                        "send_time": "2026-05-01T10:00:00Z",
+                        "emails_sent": 1200,
+                        "recipients": {"list_id": "list_a", "list_name": "Main"},
+                    }
+                ],
+            }
+        )
+        server.search_automation_campaigns(
+            list_id="list_a",
+            status="sent",
+            since_send_time="2026-04-01T00:00:00Z",
+            before_send_time="2026-06-01T00:00:00Z",
+        )
+        params = calls[0]["params"]
+        assert params["type"] == "automation"
+        assert params["list_id"] == "list_a"
+        assert params["status"] == "sent"
+        assert params["since_send_time"] == "2026-04-01T00:00:00Z"
+        assert params["before_send_time"] == "2026-06-01T00:00:00Z"
+
+    def test_get_member_journey_events_filters_activity_feed(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {
+                "activity": [
+                    {"action": "automation_email_sent", "timestamp": "2026-05-01T10:00:00Z", "title": "Welcome", "campaign_id": "cam_1"},
+                    {"action": "open", "timestamp": "2026-05-01T11:00:00Z", "title": "Welcome", "campaign_id": "cam_1"},
+                    {"action": "journey_step_entered", "timestamp": "2026-05-02T09:00:00Z", "title": "Onboarding"},
+                    {"action": "click", "url": "https://example.com", "timestamp": "2026-05-02T10:00:00Z"},
+                ]
+            }
+        )
+        payload = json.loads(server.get_member_journey_events(list_id="abc", email_address=self.EMAIL))
+        assert payload["scanned"] == 4
+        assert payload["total_journey_events"] == 2
+        actions = [e["action"] for e in payload["events"]]
+        assert "automation_email_sent" in actions
+        assert "journey_step_entered" in actions
+        assert "open" not in actions
+        assert "click" not in actions
+        assert calls[0]["endpoint"] == f"/lists/abc/members/{self.HASH}/activity-feed"
+
+    def test_get_automation_summary_combines_two_calls(self, mock_mc_request) -> None:
+        calls = mock_mc_request([
+            {
+                "total_items": 4,
+                "automations": [
+                    {"id": "a1", "status": "sending"},
+                    {"id": "a2", "status": "sending"},
+                    {"id": "a3", "status": "paused"},
+                    {"id": "a4", "status": "save"},
+                ],
+            },
+            {
+                "total_items": 2,
+                "campaigns": [
+                    {"settings": {"title": "Welcome day 1"}, "emails_sent": 4200},
+                    {"settings": {"title": "Welcome day 3"}, "emails_sent": 1800},
+                ],
+            },
+        ])
+        payload = json.loads(server.get_automation_summary(days=14))
+
+        assert payload["classic_automations"]["total"] == 4
+        assert payload["classic_automations"]["by_status"]["sending"] == 2
+        assert payload["classic_automations"]["by_status"]["paused"] == 1
+        assert payload["classic_automations"]["by_status"]["save"] == 1
+
+        recent = payload["recent_automation_campaigns"]
+        assert recent["window_days"] == 14
+        assert recent["total_campaigns"] == 2
+        assert recent["total_emails_sent"] == 6000
+        assert recent["top_titles"][0]["title"] == "Welcome day 1"
+        assert recent["top_titles"][0]["emails_sent"] == 4200
+
+        assert len(calls) == 2
+        assert calls[0]["endpoint"] == "/automations"
+        assert calls[1]["endpoint"] == "/campaigns"
+        assert calls[1]["params"]["type"] == "automation"
+        assert "since_send_time" in calls[1]["params"]

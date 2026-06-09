@@ -7,7 +7,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io)
 
-The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **112 tools** to query and manage your Mailchimp account from any MCP-compatible client, with A/B campaign support, geographic reporting, full landing-page lifecycle, CRM-style member notes, e-commerce carts and promo codes, and read-only / dry-run safety modes.
+The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **115 tools** to query and manage your Mailchimp account from any MCP-compatible client, with A/B campaign support, geographic reporting, full landing-page lifecycle, CRM-style member notes, e-commerce carts and promo codes, Classic Automation + Customer Journey reporting, and read-only / dry-run safety modes.
 
 Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api/) via [`requests`](https://pypi.org/project/requests/). Not based on the official [mailchimp-marketing-python](https://github.com/mailchimp/mailchimp-marketing-python) client. I hit too many issues with it so I went with raw HTTP calls instead.
 
@@ -306,15 +306,21 @@ Replace `mcp-cli` with your client's binary name. For read-only mode, add
 | `create_webhook` | Create a new webhook |
 | `delete_webhook` | Delete a webhook |
 
-### Automations
+### Automations & Customer Journeys
 
 | Tool | Description |
 |---|---|
-| `list_automations` | List automated email workflows |
-| `get_automation_emails` | List emails in a workflow |
+| `list_automations` | List Classic Automation workflows (Customer Journeys are not exposed by Mailchimp's API) |
+| `get_automation_emails` | List emails in a Classic workflow |
 | `get_automation_email_queue` | View the send queue for an automation email |
-| `pause_automation` | Pause all emails in a workflow |
-| `start_automation` | Start/resume all emails in a workflow |
+| `pause_automation` | Pause all emails in a Classic workflow |
+| `start_automation` | Start/resume all emails in a Classic workflow |
+| `trigger_customer_journey` | Enroll a contact into a Customer Journey step (the only journey write Mailchimp exposes) |
+| `search_automation_campaigns` | List campaigns emitted by either Classic Automations or Customer Journeys |
+| `get_member_journey_events` | Filter a member's activity feed to automation/journey-related events |
+| `get_automation_summary` | Combined overview: Classic workflows by status + recent automation send volume |
+
+> Mailchimp does not expose a public read API for Customer Journeys (only the trigger endpoint above). The `search_automation_campaigns`, `get_member_journey_events` and `get_automation_summary` tools provide the recommended workarounds — they surface every campaign emitted by automations or journeys, even though the journey graph itself remains private.
 
 ### Templates
 

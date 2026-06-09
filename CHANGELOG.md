@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05
+
+### Added
+- **`search_automation_campaigns`** — list campaigns where `type='automation'`, with
+  optional filters by audience, status, and date range. The most practical
+  workaround for the lack of a public Customer Journeys read API: while the journey
+  graph itself stays private, every email a journey emits creates a campaign
+  surface-able through this tool.
+- **`get_member_journey_events`** — retrieve a member's activity feed filtered
+  client-side to actions whose type contains `"automation"` or `"journey"`. Useful
+  to answer "what automation/journey emails has this contact received?".
+- **`get_automation_summary`** — combined overview tool: counts Classic Automation
+  workflows by status, plus aggregate send volume from automation-type campaigns
+  in a configurable lookback window (default 30 days). Recommended starting point
+  for account audits.
+- 4 new tests covering filter wiring, server-side action filtering, and the
+  multi-call aggregation in the summary tool.
+
+### Changed
+- Tool count bumped to **115** (was 112) — README, `glama.json`, and
+  `pyproject.toml` descriptions updated accordingly.
+- `list_automations` docstring now states clearly that Customer Journeys are NOT
+  returned (Mailchimp does not expose a public read endpoint for them), and points
+  at the new workaround tools.
+- README's Automations section renamed to "Automations & Customer Journeys" and
+  expanded to document the journey coverage gap and the recommended workarounds.
+
 ## [0.5.0] - 2026-05
 
 ### Added
@@ -134,7 +161,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   landing pages, e-commerce, and batch operations.
 - MIT license, Python 3.10+ support, MCP-compatible via FastMCP.
 
-[Unreleased]: https://github.com/damientilman/mailchimp-mcp-server/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/damientilman/mailchimp-mcp-server/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/damientilman/mailchimp-mcp-server/releases/tag/v0.6.0
 [0.5.0]: https://github.com/damientilman/mailchimp-mcp-server/releases/tag/v0.5.0
 [0.4.0]: https://github.com/damientilman/mailchimp-mcp-server/releases/tag/v0.4.0
 [0.3.0]: https://github.com/damientilman/mailchimp-mcp-server/releases/tag/v0.3.0
