@@ -7,35 +7,126 @@ import requests
 from mcp.server.fastmcp import FastMCP
 
 # --- Config ---
+# The plain MAILCHIMP_API_KEY is the implicit "default" account. It is served from
+# these module globals (not the registry below) so a single-key setup behaves
+# exactly as before and existing call sites/tests are unaffected.
 MAILCHIMP_API_KEY = os.environ.get("MAILCHIMP_API_KEY", "")
 MAILCHIMP_DC = MAILCHIMP_API_KEY.split("-")[-1] if "-" in MAILCHIMP_API_KEY else "us1"
 MAILCHIMP_BASE_URL = f"https://{MAILCHIMP_DC}.api.mailchimp.com/3.0"
 READ_ONLY = os.environ.get("MAILCHIMP_READ_ONLY", "").lower() in ("1", "true", "yes")
 DRY_RUN = os.environ.get("MAILCHIMP_DRY_RUN", "").lower() in ("1", "true", "yes")
 
+DEFAULT_ACCOUNT = "default"
+
+
+def _truthy(value: str) -> bool:
+    return value.lower() in ("1", "true", "yes")
+
+
+def _load_accounts() -> dict:
+    """Build the named-account registry from MAILCHIMP_API_KEY_<NAME> env vars.
+
+    Additional accounts are configured as MAILCHIMP_API_KEY_<NAME> (the suffix
+    becomes the lowercased account name). Each derives its datacenter from its own
+    key (the part after the final dash, falling back to "us1") and resolves its own
+    MAILCHIMP_READ_ONLY_<NAME> / MAILCHIMP_DRY_RUN_<NAME> safety flags.
+
+    The plain MAILCHIMP_API_KEY is intentionally NOT stored here -- it remains the
+    implicit "default" account served from the module globals, so single-key setups
+    stay identical. An empty value or a MAILCHIMP_API_KEY_DEFAULT (which would shadow
+    the implicit default) is skipped.
+    """
+    accounts: dict = {}
+    prefix = "MAILCHIMP_API_KEY_"
+    for env_name, api_key in os.environ.items():
+        if not env_name.startswith(prefix) or not api_key:
+            continue
+        name = env_name[len(prefix):].lower()
+        if not name or name == DEFAULT_ACCOUNT:
+            continue
+        dc = api_key.split("-")[-1] if "-" in api_key else "us1"
+        accounts[name] = {
+            "api_key": api_key,
+            "dc": dc,
+            "base_url": f"https://{dc}.api.mailchimp.com/3.0",
+            "read_only": _truthy(os.environ.get(f"MAILCHIMP_READ_ONLY_{name.upper()}", "")),
+            "dry_run": _truthy(os.environ.get(f"MAILCHIMP_DRY_RUN_{name.upper()}", "")),
+        }
+    return accounts
+
+
+MAILCHIMP_ACCOUNTS = _load_accounts()
+
 mcp = FastMCP("mailchimp-mcp-server")
 
 
 # --- Helpers ---
 
-def _guard_write(**context) -> Optional[str]:
+def _available_account_names() -> list:
+    """Names accepted by the `account` argument: 'default' (if a plain key is set) + named accounts."""
+    names = sorted(MAILCHIMP_ACCOUNTS)
+    if MAILCHIMP_API_KEY:
+        return [DEFAULT_ACCOUNT] + names
+    return names
+
+
+def _resolve_account(account: Optional[str]) -> dict:
+    """Resolve an account selector to its credentials and safety flags.
+
+    account=None (or "default") uses the live module globals -- the implicit default
+    account -- so single-key setups and the existing test monkeypatches behave exactly
+    as before. A named account is looked up in MAILCHIMP_ACCOUNTS. Unknown names return
+    an {"error": ...} dict listing the available accounts. account=None never auto-routes
+    to a named account, even if only one is configured.
+    """
+    if account is None or account == DEFAULT_ACCOUNT:
+        return {
+            "name": DEFAULT_ACCOUNT,
+            "api_key": MAILCHIMP_API_KEY,
+            "base_url": MAILCHIMP_BASE_URL,
+            "read_only": READ_ONLY,
+            "dry_run": DRY_RUN,
+        }
+    cfg = MAILCHIMP_ACCOUNTS.get(account)
+    if cfg is None:
+        available = ", ".join(_available_account_names()) or "(none configured)"
+        return {"error": f"Unknown account '{account}'. Available accounts: {available}."}
+    return {
+        "name": account,
+        "api_key": cfg["api_key"],
+        "base_url": cfg["base_url"],
+        "read_only": cfg["read_only"],
+        "dry_run": cfg["dry_run"],
+    }
+
+
+def _guard_write(*, account: Optional[str] = None, **context) -> Optional[str]:
     """Block writes in read-only mode, preview them in dry-run mode.
 
-    Returns a JSON string to short-circuit the caller, or None to proceed.
+    Evaluates the resolved account's safety flags. Returns a JSON string to
+    short-circuit the caller, or None to proceed. `account` is keyword-only so it
+    never leaks into the dry-run preview built from **context.
     """
-    if READ_ONLY:
+    resolved = _resolve_account(account)
+    if "error" in resolved:
+        return json.dumps({"error": resolved["error"]}, indent=2)
+    if resolved["read_only"]:
         return json.dumps({"error": "Server is in read-only mode. Set MAILCHIMP_READ_ONLY=false to allow writes."}, indent=2)
-    if DRY_RUN:
+    if resolved["dry_run"]:
         return json.dumps({"dry_run": True, **context}, indent=2)
     return None
 
 
-def mc_request(endpoint: str, params: Optional[dict] = None, body: Optional[dict] = None, method: str = "GET") -> dict:
-    """Make an authenticated request to the Mailchimp API."""
-    if not MAILCHIMP_API_KEY:
+def mc_request(endpoint: str, params: Optional[dict] = None, body: Optional[dict] = None, method: str = "GET", *, account: Optional[str] = None) -> dict:
+    """Make an authenticated request to the Mailchimp API for the resolved account."""
+    resolved = _resolve_account(account)
+    if "error" in resolved:
+        return {"error": resolved["error"]}
+    api_key = resolved["api_key"]
+    if not api_key:
         return {"error": "MAILCHIMP_API_KEY environment variable is not set. Get your API key at https://mailchimp.com/help/about-api-keys/"}
-    url = f"{MAILCHIMP_BASE_URL}/{endpoint.lstrip('/')}"
-    auth = ("anystring", MAILCHIMP_API_KEY)
+    url = f"{resolved['base_url']}/{endpoint.lstrip('/')}"
+    auth = ("anystring", api_key)
     try:
         resp = requests.request(method, url, auth=auth, params=params, json=body, timeout=30)
     except requests.exceptions.Timeout:
@@ -60,7 +151,32 @@ def mc_request(endpoint: str, params: Optional[dict] = None, body: Optional[dict
 # --- Tools ---
 
 @mcp.tool()
-def get_account_info() -> str:
+def list_accounts() -> str:
+    """List the Mailchimp accounts this server is configured to use.
+
+    Use this to discover the account names accepted by the `account` argument on every
+    other tool. Multi-account support is opt-in: define extra accounts with
+    MAILCHIMP_API_KEY_<NAME> environment variables; the plain MAILCHIMP_API_KEY is the
+    implicit 'default'. Selection is per call and stateless -- no tool changes an active
+    account. Use get_account_info for live stats about a specific account.
+
+    No network call. Never returns API keys or any secret material.
+
+    Returns:
+        JSON with `accounts`: an array of {name, read_only, dry_run, is_default}. The
+        'default' entry appears only when MAILCHIMP_API_KEY is set.
+    """
+    accounts = []
+    if MAILCHIMP_API_KEY:
+        accounts.append({"name": DEFAULT_ACCOUNT, "read_only": READ_ONLY, "dry_run": DRY_RUN, "is_default": True})
+    for name in sorted(MAILCHIMP_ACCOUNTS):
+        cfg = MAILCHIMP_ACCOUNTS[name]
+        accounts.append({"name": name, "read_only": cfg["read_only"], "dry_run": cfg["dry_run"], "is_default": False})
+    return json.dumps({"accounts": accounts}, indent=2)
+
+
+@mcp.tool()
+def get_account_info(account: str | None = None) -> str:
     """Retrieve Mailchimp account details including name, contact info, total subscribers, and industry benchmarks.
 
     Use this to verify API connectivity or inspect account-level metrics. Typically the first
@@ -68,6 +184,9 @@ def get_account_info() -> str:
     Use list_audiences to get per-audience stats.
 
     Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+
+    Args:
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: account_name (string), email (account owner), first_name, last_name,
@@ -78,7 +197,7 @@ def get_account_info() -> str:
     Example:
         get_account_info() -> {"account_name": "My Company", "total_subscribers": 5000, "industry_stats": {"open_rate": 0.21, ...}}
     """
-    data = mc_request("/")
+    data = mc_request("/", account=account)
     return json.dumps({
         "account_name": data.get("account_name"),
         "email": data.get("email"),
@@ -90,7 +209,7 @@ def get_account_info() -> str:
 
 
 @mcp.tool()
-def list_audiences(count: int = 10, offset: int = 0) -> str:
+def list_audiences(count: int = 10, offset: int = 0, account: str | None = None) -> str:
     """List audiences (lists) with subscriber counts and engagement rates.
 
     First step in most workflows to discover list_id values. Use get_audience_details for full
@@ -101,12 +220,13 @@ def list_audiences(count: int = 10, offset: int = 0) -> str:
     Args:
         count: Audiences to return (1-1000, default 10). Most accounts have fewer than 10.
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and audiences array. Each: id (use as list_id), name, member_count,
         unsubscribe_count, open_rate (0-1), click_rate (0-1), date_created.
     """
-    data = mc_request("/lists", params={"count": count, "offset": offset})
+    data = mc_request("/lists", params={"count": count, "offset": offset}, account=account)
     audiences = []
     for lst in data.get("lists", []):
         audiences.append({
@@ -122,7 +242,7 @@ def list_audiences(count: int = 10, offset: int = 0) -> str:
 
 
 @mcp.tool()
-def get_audience_details(list_id: str) -> str:
+def get_audience_details(list_id: str, account: str | None = None) -> str:
     """Retrieve full stats, subscribe URL, and rating for a specific audience.
 
     Use when you have a list_id and need detailed metrics or the public subscribe URL. Use
@@ -133,12 +253,13 @@ def get_audience_details(list_id: str) -> str:
 
     Args:
         list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, name, stats (member_count, unsubscribe_count, open_rate, click_rate),
         date_created, list_rating (0-5), subscribe_url_short.
     """
-    data = mc_request(f"/lists/{list_id}")
+    data = mc_request(f"/lists/{list_id}", account=account)
     return json.dumps({
         "id": data["id"],
         "name": data["name"],
@@ -150,7 +271,7 @@ def get_audience_details(list_id: str) -> str:
 
 
 @mcp.tool()
-def list_campaigns(count: int = 20, offset: int = 0, status: Optional[str] = None, since_send_time: Optional[str] = None) -> str:
+def list_campaigns(count: int = 20, offset: int = 0, status: Optional[str] = None, since_send_time: Optional[str] = None, account: str | None = None) -> str:
     """List campaigns with metadata, send stats, and filtering by status or date.
 
     Use to browse campaigns and discover campaign IDs. Use get_campaign_details for full settings
@@ -166,6 +287,7 @@ def list_campaigns(count: int = 20, offset: int = 0, status: Optional[str] = Non
             'sending', 'sent'. Omit to return all statuses.
         since_send_time: Only return campaigns sent after this datetime. ISO 8601 format
             (e.g. '2025-01-01T00:00:00Z'). Only applies to sent campaigns.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and campaigns array. Each campaign: id, type ('regular', 'plaintext',
@@ -180,7 +302,7 @@ def list_campaigns(count: int = 20, offset: int = 0, status: Optional[str] = Non
         params["status"] = status
     if since_send_time:
         params["since_send_time"] = since_send_time
-    data = mc_request("/campaigns", params=params)
+    data = mc_request("/campaigns", params=params, account=account)
     campaigns = []
     for c in data.get("campaigns", []):
         campaigns.append({
@@ -199,7 +321,7 @@ def list_campaigns(count: int = 20, offset: int = 0, status: Optional[str] = Non
 
 
 @mcp.tool()
-def get_campaign_details(campaign_id: str) -> str:
+def get_campaign_details(campaign_id: str, account: str | None = None) -> str:
     """Retrieve full configuration of a specific campaign including settings, recipients, and tracking options.
 
     Use to inspect subject line, sender, audience targeting, or tracking settings. Use
@@ -211,6 +333,7 @@ def get_campaign_details(campaign_id: str) -> str:
     Args:
         campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Obtain from list_campaigns
             or search_campaigns.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: id, type, status, settings (subject_line, title, from_name, reply_to),
@@ -220,7 +343,7 @@ def get_campaign_details(campaign_id: str) -> str:
     Example:
         get_campaign_details(campaign_id="abc123def4") -> {"id": "abc123def4", "status": "sent", "settings": {"subject_line": "Spring Sale", ...}}
     """
-    data = mc_request(f"/campaigns/{campaign_id}")
+    data = mc_request(f"/campaigns/{campaign_id}", account=account)
     return json.dumps({
         "id": data["id"],
         "type": data.get("type"),
@@ -234,7 +357,7 @@ def get_campaign_details(campaign_id: str) -> str:
 
 
 @mcp.tool()
-def get_campaign_content(campaign_id: str, include_html: bool = False) -> str:
+def get_campaign_content(campaign_id: str, include_html: bool = False, account: str | None = None) -> str:
     """Read the rendered body copy of a campaign (plain text, optionally HTML).
 
     Use to retrieve the email copy that was actually sent, for content audits, analysis, or
@@ -249,6 +372,7 @@ def get_campaign_content(campaign_id: str, include_html: bool = False) -> str:
             or search_campaigns. This is the API id, not the numeric web_id from the dashboard URL.
         include_html: When True, also return the raw HTML body. Defaults to False so responses
             stay compact; plain_text is enough for most content work.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with campaign_id and plain_text (the plain-text body); html is added only when
@@ -259,7 +383,7 @@ def get_campaign_content(campaign_id: str, include_html: bool = False) -> str:
     Example:
         get_campaign_content(campaign_id="abc123def4") -> {"campaign_id": "abc123def4", "plain_text": "Hi *|FNAME|* ..."}
     """
-    data = mc_request(f"/campaigns/{campaign_id}/content")
+    data = mc_request(f"/campaigns/{campaign_id}/content", account=account)
     if "error" in data:
         return json.dumps(data, indent=2)
 
@@ -285,7 +409,7 @@ def get_campaign_content(campaign_id: str, include_html: bool = False) -> str:
 
 
 @mcp.tool()
-def get_campaign_report(campaign_id: str) -> str:
+def get_campaign_report(campaign_id: str, account: str | None = None) -> str:
     """Retrieve aggregate performance metrics for a sent campaign: opens, clicks, bounces, benchmarks.
 
     High-level overview. Use get_campaign_click_details for per-link data, get_open_details for
@@ -295,13 +419,14 @@ def get_campaign_report(campaign_id: str) -> str:
 
     Args:
         campaign_id: Campaign ID (e.g. 'abc123def4'). Must be sent. Obtain from list_campaigns(status="sent").
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with campaign_title, subject_line, emails_sent, abuse_reports, unsubscribed, send_time,
         opens (opens_total, unique_opens, open_rate 0-1), clicks (clicks_total, unique_clicks,
         click_rate), bounces, forwards, list_stats, industry_stats.
     """
-    data = mc_request(f"/reports/{campaign_id}")
+    data = mc_request(f"/reports/{campaign_id}", account=account)
     return json.dumps({
         "campaign_title": data.get("campaign_title"),
         "subject_line": data.get("subject_line"),
@@ -319,7 +444,7 @@ def get_campaign_report(campaign_id: str) -> str:
 
 
 @mcp.tool()
-def get_campaign_click_details(campaign_id: str, count: int = 20) -> str:
+def get_campaign_click_details(campaign_id: str, count: int = 20, account: str | None = None) -> str:
     """Retrieve per-link click data for a campaign showing which URLs were clicked and how many times.
 
     Use to analyze which links drove engagement. Use get_campaign_report instead for aggregate
@@ -331,6 +456,7 @@ def get_campaign_click_details(campaign_id: str, count: int = 20) -> str:
     Args:
         campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
         count: Number of URL results to return (1-1000, default 20).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and links array. Each link: url (string), total_clicks (int, includes
@@ -339,7 +465,7 @@ def get_campaign_click_details(campaign_id: str, count: int = 20) -> str:
     Example:
         get_campaign_click_details(campaign_id="abc123") -> {"total_items": 5, "links": [{"url": "https://example.com", "total_clicks": 120, "unique_clicks": 95, "click_percentage": 0.019}]}
     """
-    data = mc_request(f"/reports/{campaign_id}/click-details", params={"count": count})
+    data = mc_request(f"/reports/{campaign_id}/click-details", params={"count": count}, account=account)
     links = []
     for url_report in data.get("urls_clicked", []):
         links.append({
@@ -352,7 +478,7 @@ def get_campaign_click_details(campaign_id: str, count: int = 20) -> str:
 
 
 @mcp.tool()
-def list_audience_members(list_id: str, count: int = 20, offset: int = 0, status: Optional[str] = None) -> str:
+def list_audience_members(list_id: str, count: int = 20, offset: int = 0, status: Optional[str] = None, account: str | None = None) -> str:
     """List members of a specific audience with subscription status, merge fields, and engagement stats.
 
     Use to browse members of a known audience. Use search_members instead to find a specific
@@ -367,6 +493,7 @@ def list_audience_members(list_id: str, count: int = 20, offset: int = 0, status
         offset: Pagination offset. Use when total_items exceeds count.
         status: Filter by subscription status. Valid values: 'subscribed', 'unsubscribed',
             'cleaned', 'pending', 'transactional'. Omit to return all statuses.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and members array. Each member: id (MD5 hash of email), email_address,
@@ -379,7 +506,7 @@ def list_audience_members(list_id: str, count: int = 20, offset: int = 0, status
     params = {"count": count, "offset": offset}
     if status:
         params["status"] = status
-    data = mc_request(f"/lists/{list_id}/members", params=params)
+    data = mc_request(f"/lists/{list_id}/members", params=params, account=account)
     members = []
     for m in data.get("members", []):
         members.append({
@@ -396,7 +523,7 @@ def list_audience_members(list_id: str, count: int = 20, offset: int = 0, status
 
 
 @mcp.tool()
-def search_members(query: str, list_id: Optional[str] = None) -> str:
+def search_members(query: str, list_id: Optional[str] = None, account: str | None = None) -> str:
     """Search for members across all audiences by email address or name, returning both exact and fuzzy matches.
 
     Use when looking for a specific person and you may not know which audience they belong to.
@@ -410,6 +537,7 @@ def search_members(query: str, list_id: Optional[str] = None) -> str:
             fuzzy search. Minimum 3 characters.
         list_id: Optional audience/list ID to restrict search to a single audience. Obtain
             from list_audiences.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with results array combining exact and fuzzy matches. Each result: email, status
@@ -422,7 +550,7 @@ def search_members(query: str, list_id: Optional[str] = None) -> str:
     params = {"query": query}
     if list_id:
         params["list_id"] = list_id
-    data = mc_request("/search-members", params=params)
+    data = mc_request("/search-members", params=params, account=account)
     results = []
     for match in data.get("exact_matches", {}).get("members", []):
         results.append({
@@ -442,7 +570,7 @@ def search_members(query: str, list_id: Optional[str] = None) -> str:
 
 
 @mcp.tool()
-def get_audience_growth_history(list_id: str, count: int = 12) -> str:
+def get_audience_growth_history(list_id: str, count: int = 12, account: str | None = None) -> str:
     """Retrieve monthly growth history for an audience (subscribes, unsubscribes, cleaned).
 
     Each record is one calendar month, ordered newest first. Use get_audience_details for
@@ -453,12 +581,13 @@ def get_audience_growth_history(list_id: str, count: int = 12) -> str:
     Args:
         list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
         count: Months to return (1-1000, default 12).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with list_id and history array. Each: month (YYYY-MM), subscribed, unsubscribed,
         reconfirm, cleaned, pending, transactional (all cumulative ints).
     """
-    data = mc_request(f"/lists/{list_id}/growth-history", params={"count": count})
+    data = mc_request(f"/lists/{list_id}/growth-history", params={"count": count}, account=account)
     history = []
     for h in data.get("history", []):
         history.append({
@@ -474,7 +603,7 @@ def get_audience_growth_history(list_id: str, count: int = 12) -> str:
 
 
 @mcp.tool()
-def list_automations(count: int = 20, offset: int = 0) -> str:
+def list_automations(count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """List Classic Automation workflows in the account with status and send counts.
 
     Returns Classic Automations only — ordered by creation date descending. Customer Journeys
@@ -489,12 +618,13 @@ def list_automations(count: int = 20, offset: int = 0) -> str:
     Args:
         count: Automations to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and automations array. Each: id, status ('sending'/'paused'/'draft'),
         title, emails_sent, start_time, create_time, list_id.
     """
-    data = mc_request("/automations", params={"count": count, "offset": offset})
+    data = mc_request("/automations", params={"count": count, "offset": offset}, account=account)
     automations = []
     for a in data.get("automations", []):
         automations.append({
@@ -510,7 +640,7 @@ def list_automations(count: int = 20, offset: int = 0) -> str:
 
 
 @mcp.tool()
-def get_automation_summary(days: int = 30) -> str:
+def get_automation_summary(days: int = 30, account: str | None = None) -> str:
     """Summarise automation activity across Classic Automations and Customer Journeys.
 
     Combines two API calls into a single overview useful for audits and dashboards:
@@ -528,6 +658,7 @@ def get_automation_summary(days: int = 30) -> str:
 
     Args:
         days: Lookback window in days for the recent-sends portion (1-365, default 30).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with two sections:
@@ -535,7 +666,7 @@ def get_automation_summary(days: int = 30) -> str:
         - recent_automation_campaigns: window_days, total_campaigns, total_emails_sent,
           top_titles (up to 5 titles ordered by emails_sent desc)
     """
-    automations_data = mc_request("/automations", params={"count": 1000})
+    automations_data = mc_request("/automations", params={"count": 1000}, account=account)
     by_status: dict = {}
     classic_total = 0
     if isinstance(automations_data, dict) and "error" not in automations_data:
@@ -549,6 +680,7 @@ def get_automation_summary(days: int = 30) -> str:
     campaigns_data = mc_request(
         "/campaigns",
         params={"count": 1000, "type": "automation", "since_send_time": since},
+        account=account,
     )
     recent_campaigns: list = []
     recent_emails_sent = 0
@@ -581,7 +713,7 @@ def get_automation_summary(days: int = 30) -> str:
 
 
 @mcp.tool()
-def list_templates(count: int = 20, offset: int = 0) -> str:
+def list_templates(count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """List email templates in the account (user-created and Mailchimp gallery templates).
 
     Use to browse templates and find template IDs. Use get_template_default_content to extract
@@ -593,12 +725,13 @@ def list_templates(count: int = 20, offset: int = 0) -> str:
     Args:
         count: Templates to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and templates array. Each: id (int), name, type ('user'/'gallery'/
         'base'), date_created, active (boolean).
     """
-    data = mc_request("/templates", params={"count": count, "offset": offset})
+    data = mc_request("/templates", params={"count": count, "offset": offset}, account=account)
     templates = []
     for t in data.get("templates", []):
         templates.append({
@@ -612,7 +745,7 @@ def list_templates(count: int = 20, offset: int = 0) -> str:
 
 
 @mcp.tool()
-def get_template_default_content(template_id: str) -> str:
+def get_template_default_content(template_id: str, account: str | None = None) -> str:
     """Retrieve the default HTML content of a template for use in campaign content.
 
     Use to extract a template's HTML before customizing it with set_campaign_content. Only works
@@ -624,11 +757,12 @@ def get_template_default_content(template_id: str) -> str:
 
     Args:
         template_id: Template ID (numeric string, e.g. '12345'). Obtain from list_templates.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with html (string, full HTML content), sections (object with editable content blocks).
     """
-    data = mc_request(f"/templates/{template_id}/default-content")
+    data = mc_request(f"/templates/{template_id}/default-content", account=account)
     return json.dumps({
         "html": data.get("html"),
         "sections": data.get("sections"),
@@ -636,7 +770,7 @@ def get_template_default_content(template_id: str) -> str:
 
 
 @mcp.tool()
-def get_template(template_id: str) -> str:
+def get_template(template_id: str, account: str | None = None) -> str:
     """Retrieve metadata for a template (name, type, dates, folder, thumbnail) without its HTML content.
 
     Use to inspect a template's settings or verify it exists before referencing it elsewhere.
@@ -648,13 +782,14 @@ def get_template(template_id: str) -> str:
 
     Args:
         template_id: Template ID (numeric string, e.g. '12345'). Obtain from list_templates.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, name, type ('user' | 'base' | 'gallery'), drag_and_drop (bool),
         date_created, date_edited, created_by, edited_by, active (bool), folder_id, thumbnail,
         share_url, category.
     """
-    data = mc_request(f"/templates/{template_id}")
+    data = mc_request(f"/templates/{template_id}", account=account)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -673,7 +808,7 @@ def get_template(template_id: str) -> str:
 
 
 @mcp.tool()
-def create_template(name: str, html: str, folder_id: Optional[str] = None) -> str:
+def create_template(name: str, html: str, folder_id: Optional[str] = None, account: str | None = None) -> str:
     """Create a new reusable email template from HTML content.
 
     Use to save HTML email designs for reuse across campaigns. Retrieve template HTML later via
@@ -688,16 +823,17 @@ def create_template(name: str, html: str, folder_id: Optional[str] = None) -> st
             compatibility. Mailchimp merge tags (e.g. *|FNAME|*, *|UNSUB|*) are supported.
         folder_id: Optional template folder ID to organize the template. Obtain from the
             Mailchimp web UI.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id (int, new template ID), name, type ('user'), active (boolean), date_created.
     """
-    if (guard := _guard_write(action="create template", name=name)):
+    if (guard := _guard_write(action="create template", name=name, account=account)):
         return guard
     body: dict = {"name": name, "html": html}
     if folder_id:
         body["folder_id"] = folder_id
-    data = mc_request("/templates", body=body, method="POST")
+    data = mc_request("/templates", body=body, method="POST", account=account)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -708,7 +844,7 @@ def create_template(name: str, html: str, folder_id: Optional[str] = None) -> st
 
 
 @mcp.tool()
-def update_template(template_id: str, name: Optional[str] = None, html: Optional[str] = None) -> str:
+def update_template(template_id: str, name: Optional[str] = None, html: Optional[str] = None, account: str | None = None) -> str:
     """Update an existing template's name or HTML content.
 
     Only provided fields are updated. Only works for user-created templates; gallery and base
@@ -722,18 +858,19 @@ def update_template(template_id: str, name: Optional[str] = None, html: Optional
         template_id: Template ID to update (numeric string, e.g. '12345'). Obtain from list_templates.
         name: New display name for the template.
         html: New HTML content. Replaces all existing content.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, name, type, active, date_edited.
     """
-    if (guard := _guard_write(action="update template", template_id=template_id)):
+    if (guard := _guard_write(action="update template", template_id=template_id, account=account)):
         return guard
     body: dict = {}
     if name is not None:
         body["name"] = name
     if html is not None:
         body["html"] = html
-    data = mc_request(f"/templates/{template_id}", body=body, method="PATCH")
+    data = mc_request(f"/templates/{template_id}", body=body, method="PATCH", account=account)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -744,7 +881,7 @@ def update_template(template_id: str, name: Optional[str] = None, html: Optional
 
 
 @mcp.tool()
-def delete_template(template_id: str) -> str:
+def delete_template(template_id: str, account: str | None = None) -> str:
     """Delete a user-created template permanently.
 
     Irreversible. Only works for user-created templates; gallery and base templates cannot be
@@ -756,18 +893,19 @@ def delete_template(template_id: str) -> str:
 
     Args:
         template_id: Template ID to delete (numeric string, e.g. '12345'). Must be type 'user'.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ("deleted"), template_id.
     """
-    if (guard := _guard_write(action="delete template", template_id=template_id)):
+    if (guard := _guard_write(action="delete template", template_id=template_id, account=account)):
         return guard
-    mc_request(f"/templates/{template_id}", method="DELETE")
+    mc_request(f"/templates/{template_id}", method="DELETE", account=account)
     return json.dumps({"status": "deleted", "template_id": template_id}, indent=2)
 
 
 @mcp.tool()
-def list_segments(list_id: str, count: int = 20, offset: int = 0) -> str:
+def list_segments(list_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """List segments and tags for an audience with member counts and types.
 
     Use to discover segment IDs for campaign targeting or membership management. Returns both
@@ -780,12 +918,13 @@ def list_segments(list_id: str, count: int = 20, offset: int = 0) -> str:
         list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
         count: Segments to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and segments array. Each: id (use as segment_id), name, member_count,
         type ('static'/'saved'), created_at, updated_at.
     """
-    data = mc_request(f"/lists/{list_id}/segments", params={"count": count, "offset": offset})
+    data = mc_request(f"/lists/{list_id}/segments", params={"count": count, "offset": offset}, account=account)
     segments = []
     for s in data.get("segments", []):
         segments.append({
@@ -802,7 +941,7 @@ def list_segments(list_id: str, count: int = 20, offset: int = 0) -> str:
 # --- Write Tools: Members ---
 
 @mcp.tool()
-def add_member(list_id: str, email_address: str, status: str = "subscribed", first_name: Optional[str] = None, last_name: Optional[str] = None, tags: Optional[str] = None) -> str:
+def add_member(list_id: str, email_address: str, status: str = "subscribed", first_name: Optional[str] = None, last_name: Optional[str] = None, tags: Optional[str] = None, account: str | None = None) -> str:
     """Add a new member to an audience with optional name and tags.
 
     Creates a new contact. Returns "Member Exists" error if already present. Choose the right
@@ -820,11 +959,12 @@ def add_member(list_id: str, email_address: str, status: str = "subscribed", fir
         first_name: First name (FNAME merge field).
         last_name: Last name (LNAME merge field).
         tags: Comma-separated tag names (e.g. 'VIP,Newsletter'). Created automatically if new.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id (MD5 hash of email), email_address, status, full_name.
     """
-    if (guard := _guard_write(action="add member", email_address=email_address, list_id=list_id, status=status)):
+    if (guard := _guard_write(action="add member", email_address=email_address, list_id=list_id, status=status, account=account)):
         return guard
     body: dict = {"email_address": email_address, "status": status}
     merge_fields = {}
@@ -836,7 +976,7 @@ def add_member(list_id: str, email_address: str, status: str = "subscribed", fir
         body["merge_fields"] = merge_fields
     if tags:
         body["tags"] = [t.strip() for t in tags.split(",")]
-    data = mc_request(f"/lists/{list_id}/members", body=body, method="POST")
+    data = mc_request(f"/lists/{list_id}/members", body=body, method="POST", account=account)
     return json.dumps({
         "id": data.get("id"),
         "email_address": data.get("email_address"),
@@ -846,7 +986,7 @@ def add_member(list_id: str, email_address: str, status: str = "subscribed", fir
 
 
 @mcp.tool()
-def update_member(list_id: str, email_address: str, status: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None) -> str:
+def update_member(list_id: str, email_address: str, status: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None, account: str | None = None) -> str:
     """Update a member's profile fields or subscription status. Does not manage tags.
 
     Only provided fields are updated; omitted fields remain unchanged. Idempotent: re-applying
@@ -865,11 +1005,12 @@ def update_member(list_id: str, email_address: str, status: Optional[str] = None
         status: New status: 'subscribed', 'unsubscribed', 'cleaned', 'pending'.
         first_name: New first name (FNAME merge field).
         last_name: New last name (LNAME merge field).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, email_address, status, full_name.
     """
-    if (guard := _guard_write(action="update member", email_address=email_address, list_id=list_id)):
+    if (guard := _guard_write(action="update member", email_address=email_address, list_id=list_id, account=account)):
         return guard
     subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
     body: dict = {}
@@ -882,7 +1023,7 @@ def update_member(list_id: str, email_address: str, status: Optional[str] = None
         merge_fields["LNAME"] = last_name
     if merge_fields:
         body["merge_fields"] = merge_fields
-    data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}", body=body, method="PATCH")
+    data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}", body=body, method="PATCH", account=account)
     return json.dumps({
         "id": data.get("id"),
         "email_address": data.get("email_address"),
@@ -892,7 +1033,7 @@ def update_member(list_id: str, email_address: str, status: Optional[str] = None
 
 
 @mcp.tool()
-def unsubscribe_member(list_id: str, email_address: str) -> str:
+def unsubscribe_member(list_id: str, email_address: str, account: str | None = None) -> str:
     """Unsubscribe a member from an audience, preserving profile and history for reporting.
 
     Reversible via update_member(status='subscribed'). Use delete_member for permanent removal
@@ -903,14 +1044,15 @@ def unsubscribe_member(list_id: str, email_address: str) -> str:
     Args:
         list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
         email_address: Email of the member. Must be a valid email address and exist in the audience.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with email_address, status ("unsubscribed").
     """
-    if (guard := _guard_write(action="unsubscribe member", email_address=email_address, list_id=list_id)):
+    if (guard := _guard_write(action="unsubscribe member", email_address=email_address, list_id=list_id, account=account)):
         return guard
     subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
-    data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}", body={"status": "unsubscribed"}, method="PATCH")
+    data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}", body={"status": "unsubscribed"}, method="PATCH", account=account)
     return json.dumps({
         "email_address": data.get("email_address"),
         "status": data.get("status"),
@@ -918,7 +1060,7 @@ def unsubscribe_member(list_id: str, email_address: str) -> str:
 
 
 @mcp.tool()
-def delete_member(list_id: str, email_address: str) -> str:
+def delete_member(list_id: str, email_address: str, account: str | None = None) -> str:
     """Permanently delete a member and all their data from an audience.
 
     Use only for complete data removal (e.g. GDPR right-to-erasure requests). All activity history,
@@ -930,6 +1072,7 @@ def delete_member(list_id: str, email_address: str) -> str:
     Args:
         list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
         email_address: Email address of the member to permanently delete. Must exist in the audience.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: status ("permanently_deleted"), email_address. Returns error if the
@@ -938,15 +1081,15 @@ def delete_member(list_id: str, email_address: str) -> str:
     Example:
         delete_member(list_id="abc123", email_address="jane@co.com") -> {"status": "permanently_deleted", "email_address": "jane@co.com"}
     """
-    if (guard := _guard_write(action="permanently delete member", email_address=email_address, list_id=list_id)):
+    if (guard := _guard_write(action="permanently delete member", email_address=email_address, list_id=list_id, account=account)):
         return guard
     subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
-    mc_request(f"/lists/{list_id}/members/{subscriber_hash}/actions/delete-permanent", method="POST")
+    mc_request(f"/lists/{list_id}/members/{subscriber_hash}/actions/delete-permanent", method="POST", account=account)
     return json.dumps({"status": "permanently_deleted", "email_address": email_address}, indent=2)
 
 
 @mcp.tool()
-def tag_member(list_id: str, email_address: str, tags_to_add: Optional[str] = None, tags_to_remove: Optional[str] = None) -> str:
+def tag_member(list_id: str, email_address: str, tags_to_add: Optional[str] = None, tags_to_remove: Optional[str] = None, account: str | None = None) -> str:
     """Add or remove tags from a single member. Does not modify profile data or subscription status.
 
     Tags are case-insensitive free-form labels. Added tags are created automatically if new;
@@ -963,11 +1106,12 @@ def tag_member(list_id: str, email_address: str, tags_to_add: Optional[str] = No
         email_address: Email of the member. Must exist in the audience.
         tags_to_add: Comma-separated tag names to add (e.g. 'VIP,Returning Customer').
         tags_to_remove: Comma-separated tag names to remove (e.g. 'Trial').
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ("updated"), email_address, tags array with name and status 'active'/'inactive'.
     """
-    if (guard := _guard_write(action="update member tags", email_address=email_address, list_id=list_id)):
+    if (guard := _guard_write(action="update member tags", email_address=email_address, list_id=list_id, account=account)):
         return guard
     subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
     tags = []
@@ -977,14 +1121,14 @@ def tag_member(list_id: str, email_address: str, tags_to_add: Optional[str] = No
     if tags_to_remove:
         for t in tags_to_remove.split(","):
             tags.append({"name": t.strip(), "status": "inactive"})
-    mc_request(f"/lists/{list_id}/members/{subscriber_hash}/tags", body={"tags": tags}, method="POST")
+    mc_request(f"/lists/{list_id}/members/{subscriber_hash}/tags", body={"tags": tags}, method="POST", account=account)
     return json.dumps({"status": "updated", "email_address": email_address, "tags": tags}, indent=2)
 
 
 # --- Write Tools: Audiences ---
 
 @mcp.tool()
-def batch_subscribe(list_id: str, members_json: str, update_existing: bool = True) -> str:
+def batch_subscribe(list_id: str, members_json: str, update_existing: bool = True, account: str | None = None) -> str:
     """Add or update up to 500 members in a single synchronous request.
 
     Use for bulk operations. Choose the right member tool: batch_subscribe for 2-500 members,
@@ -998,15 +1142,16 @@ def batch_subscribe(list_id: str, members_json: str, update_existing: bool = Tru
         members_json: JSON array of members (max 500). Each requires email_address and status
             ('subscribed'/'unsubscribed'/'cleaned'/'pending'). Optional: merge_fields, tags.
         update_existing: If true (default), existing members are updated. If false, skipped as errors.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with new_members, updated_members, errors array, total_created, total_updated, error_count.
     """
-    if (guard := _guard_write(action="batch subscribe members", list_id=list_id)):
+    if (guard := _guard_write(action="batch subscribe members", list_id=list_id, account=account)):
         return guard
     members = json.loads(members_json)
     body = {"members": members, "update_existing": update_existing}
-    data = mc_request(f"/lists/{list_id}", body=body, method="POST")
+    data = mc_request(f"/lists/{list_id}", body=body, method="POST", account=account)
     return json.dumps({
         "new_members": len(data.get("new_members", [])),
         "updated_members": len(data.get("updated_members", [])),
@@ -1018,7 +1163,7 @@ def batch_subscribe(list_id: str, members_json: str, update_existing: bool = Tru
 
 
 @mcp.tool()
-def update_audience(list_id: str, name: Optional[str] = None, from_name: Optional[str] = None, from_email: Optional[str] = None, subject: Optional[str] = None, permission_reminder: Optional[str] = None) -> str:
+def update_audience(list_id: str, name: Optional[str] = None, from_name: Optional[str] = None, from_email: Optional[str] = None, subject: Optional[str] = None, permission_reminder: Optional[str] = None, account: str | None = None) -> str:
     """Update audience-level settings: name, default sender, subject, and permission reminder.
 
     Changes apply to newly created campaigns only; does not retroactively affect existing ones.
@@ -1033,12 +1178,13 @@ def update_audience(list_id: str, name: Optional[str] = None, from_name: Optiona
         from_email: Default sender email. Must be a verified sending domain in Mailchimp.
         subject: Default subject line for new campaigns (e.g. 'Monthly Update'). Max 150 chars.
         permission_reminder: Why subscribers receive emails (required by CAN-SPAM).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, name, permission_reminder, campaign_defaults (from_name, from_email, subject,
         language).
     """
-    if (guard := _guard_write(action="update audience", list_id=list_id)):
+    if (guard := _guard_write(action="update audience", list_id=list_id, account=account)):
         return guard
     body: dict = {}
     if name:
@@ -1054,7 +1200,7 @@ def update_audience(list_id: str, name: Optional[str] = None, from_name: Optiona
         campaign_defaults["subject"] = subject
     if campaign_defaults:
         body["campaign_defaults"] = campaign_defaults
-    data = mc_request(f"/lists/{list_id}", body=body, method="PATCH")
+    data = mc_request(f"/lists/{list_id}", body=body, method="PATCH", account=account)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -1064,7 +1210,7 @@ def update_audience(list_id: str, name: Optional[str] = None, from_name: Optiona
 
 
 @mcp.tool()
-def create_audience(name: str, from_name: str, from_email: str, subject: str, language: str, company: str, address1: str, city: str, state: str, zip: str, country: str, permission_reminder: str, email_type_option: bool = False, address2: Optional[str] = None, phone: Optional[str] = None) -> str:
+def create_audience(name: str, from_name: str, from_email: str, subject: str, language: str, company: str, address1: str, city: str, state: str, zip: str, country: str, permission_reminder: str, email_type_option: bool = False, address2: Optional[str] = None, phone: Optional[str] = None, account: str | None = None) -> str:
     """Create a new audience (list) with required contact info, campaign defaults, and permission reminder.
 
     Side effect: creates a billable audience under the Mailchimp plan. Mailchimp requires all
@@ -1092,12 +1238,13 @@ def create_audience(name: str, from_name: str, from_email: str, subject: str, la
         email_type_option: If true, lets subscribers choose plaintext vs. HTML emails. Default false.
         address2: Optional secondary postal address line.
         phone: Optional contact phone number shown in the footer.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id (new list_id, save for subsequent calls), name, member_count (0 at creation),
         date_created, subscribe_url_short.
     """
-    if (guard := _guard_write(action="create audience", name=name, from_email=from_email)):
+    if (guard := _guard_write(action="create audience", name=name, from_email=from_email, account=account)):
         return guard
     contact: dict = {
         "company": company,
@@ -1123,7 +1270,7 @@ def create_audience(name: str, from_name: str, from_email: str, subject: str, la
         },
         "email_type_option": email_type_option,
     }
-    data = mc_request("/lists", body=body, method="POST")
+    data = mc_request("/lists", body=body, method="POST", account=account)
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
     return json.dumps({
@@ -1136,7 +1283,7 @@ def create_audience(name: str, from_name: str, from_email: str, subject: str, la
 
 
 @mcp.tool()
-def delete_audience(list_id: str) -> str:
+def delete_audience(list_id: str, account: str | None = None) -> str:
     """Permanently delete an audience and all its members, segments, campaigns, and stats. Irreversible.
 
     Side effect: removes every member of the audience and all historical data tied to it.
@@ -1149,13 +1296,14 @@ def delete_audience(list_id: str) -> str:
     Args:
         list_id: Audience/list ID to delete (10-char alphanumeric, e.g. 'abc123def4').
             Obtain from list_audiences. Double-check before calling — deletion is permanent.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ('deleted') and list_id on success, or error object on failure.
     """
-    if (guard := _guard_write(action="delete audience", list_id=list_id)):
+    if (guard := _guard_write(action="delete audience", list_id=list_id, account=account)):
         return guard
-    result = mc_request(f"/lists/{list_id}", method="DELETE")
+    result = mc_request(f"/lists/{list_id}", method="DELETE", account=account)
     if isinstance(result, dict) and "error" in result:
         return json.dumps(result, indent=2)
     return json.dumps({"status": "deleted", "list_id": list_id}, indent=2)
@@ -1164,7 +1312,7 @@ def delete_audience(list_id: str) -> str:
 # --- Write Tools: Campaigns ---
 
 @mcp.tool()
-def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None, preview_text: Optional[str] = None, from_name: Optional[str] = None, reply_to: Optional[str] = None, segment_id: Optional[str] = None, campaign_type: str = "regular", variate_settings_json: Optional[str] = None) -> str:
+def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None, preview_text: Optional[str] = None, from_name: Optional[str] = None, reply_to: Optional[str] = None, segment_id: Optional[str] = None, campaign_type: str = "regular", variate_settings_json: Optional[str] = None, account: str | None = None) -> str:
     """Create a new email campaign in draft status, with optional segment targeting or A/B variate testing.
 
     Typical workflow: create_campaign -> set_campaign_content (add HTML body) -> send_test_email
@@ -1199,6 +1347,7 @@ def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None
             HTML strings). Example:
             '{"winner_criteria": "opens", "test_size": 20, "wait_time": 1440,
               "subject_lines": ["Spring Sale 20% off", "Last chance: 20% off Spring"]}'
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: id (string, the new campaign ID for use with set_campaign_content,
@@ -1209,7 +1358,7 @@ def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None
     Example:
         create_campaign(list_id="abc123", subject_line="Spring Sale", preview_text="20% off") -> {"id": "def456", "status": "save", "type": "regular", ...}
     """
-    if (guard := _guard_write(action="create campaign draft", list_id=list_id, subject_line=subject_line, campaign_type=campaign_type)):
+    if (guard := _guard_write(action="create campaign draft", list_id=list_id, subject_line=subject_line, campaign_type=campaign_type, account=account)):
         return guard
     if campaign_type == "variate" and not variate_settings_json:
         return json.dumps({"error": "variate_settings_json is required when campaign_type='variate'"}, indent=2)
@@ -1233,7 +1382,7 @@ def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None
             body["variate_settings"] = json.loads(variate_settings_json)
         except json.JSONDecodeError as e:
             return json.dumps({"error": f"Invalid variate_settings_json: {e}"}, indent=2)
-    data = mc_request("/campaigns", body=body, method="POST")
+    data = mc_request("/campaigns", body=body, method="POST", account=account)
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
     return json.dumps({
@@ -1247,7 +1396,7 @@ def create_campaign(list_id: str, subject_line: str, title: Optional[str] = None
 
 
 @mcp.tool()
-def update_campaign(campaign_id: str, subject_line: Optional[str] = None, title: Optional[str] = None, preview_text: Optional[str] = None, from_name: Optional[str] = None, reply_to: Optional[str] = None, list_id: Optional[str] = None, segment_id: Optional[str] = None) -> str:
+def update_campaign(campaign_id: str, subject_line: Optional[str] = None, title: Optional[str] = None, preview_text: Optional[str] = None, from_name: Optional[str] = None, reply_to: Optional[str] = None, list_id: Optional[str] = None, segment_id: Optional[str] = None, account: str | None = None) -> str:
     """Update settings or segment targeting of an existing campaign draft.
 
     Use to modify subject line, sender, or segment targeting before sending. Only works on
@@ -1268,6 +1417,7 @@ def update_campaign(campaign_id: str, subject_line: Optional[str] = None, title:
         list_id: Audience/list ID. Required when changing segment_id. Obtain from list_audiences.
         segment_id: Saved segment ID to target. Requires list_id to also be set. Obtain from
             list_segments.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: id, status, settings (full settings object), recipients (list_id,
@@ -1276,7 +1426,7 @@ def update_campaign(campaign_id: str, subject_line: Optional[str] = None, title:
     Example:
         update_campaign(campaign_id="abc123", subject_line="Updated Subject") -> {"id": "abc123", "status": "save", "settings": {"subject_line": "Updated Subject", ...}}
     """
-    if (guard := _guard_write(action="update campaign", campaign_id=campaign_id)):
+    if (guard := _guard_write(action="update campaign", campaign_id=campaign_id, account=account)):
         return guard
     settings: dict = {}
     if subject_line:
@@ -1299,7 +1449,7 @@ def update_campaign(campaign_id: str, subject_line: Optional[str] = None, title:
         if segment_id:
             recipients["segment_opts"] = {"saved_segment_id": int(segment_id)}
         body["recipients"] = recipients
-    data = mc_request(f"/campaigns/{campaign_id}", body=body, method="PATCH")
+    data = mc_request(f"/campaigns/{campaign_id}", body=body, method="PATCH", account=account)
     return json.dumps({
         "id": data.get("id"),
         "status": data.get("status"),
@@ -1309,7 +1459,7 @@ def update_campaign(campaign_id: str, subject_line: Optional[str] = None, title:
 
 
 @mcp.tool()
-def set_campaign_content(campaign_id: str, html: str) -> str:
+def set_campaign_content(campaign_id: str, html: str, account: str | None = None) -> str:
     """Set the full HTML body of a campaign draft, replacing any existing content entirely.
 
     Use after create_campaign to add the email body before sending. The campaign must be in 'save'
@@ -1325,6 +1475,7 @@ def set_campaign_content(campaign_id: str, html: str) -> str:
         html: Complete HTML content for the email body. Must be valid HTML. Use inline CSS for
             email client compatibility. Mailchimp merge tags (e.g. *|FNAME|*, *|UNSUB|*) are
             supported. Large HTML payloads may time out; keep under 200KB.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: status ("content_set"), campaign_id. Returns error if campaign is
@@ -1333,16 +1484,16 @@ def set_campaign_content(campaign_id: str, html: str) -> str:
     Example:
         set_campaign_content(campaign_id="abc123", html="<html><body><h1>Hello *|FNAME|*!</h1></body></html>") -> {"status": "content_set", "campaign_id": "abc123"}
     """
-    if (guard := _guard_write(action="set campaign content", campaign_id=campaign_id)):
+    if (guard := _guard_write(action="set campaign content", campaign_id=campaign_id, account=account)):
         return guard
-    result = mc_request(f"/campaigns/{campaign_id}/content", body={"html": html}, method="PUT")
+    result = mc_request(f"/campaigns/{campaign_id}/content", body={"html": html}, method="PUT", account=account)
     if isinstance(result, dict) and "error" in result:
         return json.dumps(result, indent=2)
     return json.dumps({"status": "content_set", "campaign_id": campaign_id}, indent=2)
 
 
 @mcp.tool()
-def schedule_campaign(campaign_id: str, schedule_time: str) -> str:
+def schedule_campaign(campaign_id: str, schedule_time: str, account: str | None = None) -> str:
     """Schedule a campaign draft for sending at a specific future time.
 
     Use to schedule delivery of a draft campaign. The campaign must have content set via
@@ -1355,6 +1506,7 @@ def schedule_campaign(campaign_id: str, schedule_time: str) -> str:
         campaign_id: The campaign ID (e.g. 'abc123def4'). Must be in 'save' status with content set.
         schedule_time: When to send. ISO 8601 datetime in UTC (e.g. '2025-06-15T14:00:00Z').
             Must be at least 15 minutes in the future. Mailchimp rounds to the nearest quarter hour.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: status ("scheduled"), campaign_id, schedule_time. Returns error if
@@ -1363,14 +1515,14 @@ def schedule_campaign(campaign_id: str, schedule_time: str) -> str:
     Example:
         schedule_campaign(campaign_id="abc123", schedule_time="2025-06-15T14:00:00Z") -> {"status": "scheduled", "campaign_id": "abc123", "schedule_time": "2025-06-15T14:00:00Z"}
     """
-    if (guard := _guard_write(action="schedule campaign", campaign_id=campaign_id, schedule_time=schedule_time)):
+    if (guard := _guard_write(action="schedule campaign", campaign_id=campaign_id, schedule_time=schedule_time, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}/actions/schedule", body={"schedule_time": schedule_time}, method="POST")
+    mc_request(f"/campaigns/{campaign_id}/actions/schedule", body={"schedule_time": schedule_time}, method="POST", account=account)
     return json.dumps({"status": "scheduled", "campaign_id": campaign_id, "schedule_time": schedule_time}, indent=2)
 
 
 @mcp.tool()
-def unschedule_campaign(campaign_id: str) -> str:
+def unschedule_campaign(campaign_id: str, account: str | None = None) -> str:
     """Cancel a scheduled campaign send, returning it to draft ('save') status for editing.
 
     Use to cancel a scheduled send before it goes out. Only works on campaigns in 'schedule'
@@ -1382,6 +1534,7 @@ def unschedule_campaign(campaign_id: str) -> str:
     Args:
         campaign_id: The campaign ID to unschedule (e.g. 'abc123def4'). Must be in 'schedule'
             status. Obtain from list_campaigns(status='schedule').
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: status ("unscheduled"), campaign_id. Returns error if the campaign
@@ -1390,14 +1543,14 @@ def unschedule_campaign(campaign_id: str) -> str:
     Example:
         unschedule_campaign(campaign_id="abc123") -> {"status": "unscheduled", "campaign_id": "abc123"}
     """
-    if (guard := _guard_write(action="unschedule campaign", campaign_id=campaign_id)):
+    if (guard := _guard_write(action="unschedule campaign", campaign_id=campaign_id, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}/actions/unschedule", method="POST")
+    mc_request(f"/campaigns/{campaign_id}/actions/unschedule", method="POST", account=account)
     return json.dumps({"status": "unscheduled", "campaign_id": campaign_id}, indent=2)
 
 
 @mcp.tool()
-def replicate_campaign(campaign_id: str) -> str:
+def replicate_campaign(campaign_id: str, account: str | None = None) -> str:
     """Clone an existing campaign into a new draft with identical settings, recipients, and content.
 
     Use to reuse a successful campaign as a starting point. Works on campaigns of any status
@@ -1409,6 +1562,7 @@ def replicate_campaign(campaign_id: str) -> str:
 
     Args:
         campaign_id: The campaign ID to replicate (e.g. 'abc123def4'). Obtain from list_campaigns.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: id (string, the NEW campaign's ID, different from original), status
@@ -1418,9 +1572,9 @@ def replicate_campaign(campaign_id: str) -> str:
     Example:
         replicate_campaign(campaign_id="abc123") -> {"id": "def456", "status": "save", "title": "Spring Sale (copy)", "web_id": 789012}
     """
-    if (guard := _guard_write(action="replicate campaign", campaign_id=campaign_id)):
+    if (guard := _guard_write(action="replicate campaign", campaign_id=campaign_id, account=account)):
         return guard
-    data = mc_request(f"/campaigns/{campaign_id}/actions/replicate", method="POST")
+    data = mc_request(f"/campaigns/{campaign_id}/actions/replicate", method="POST", account=account)
     return json.dumps({
         "id": data.get("id"),
         "status": data.get("status"),
@@ -1430,7 +1584,7 @@ def replicate_campaign(campaign_id: str) -> str:
 
 
 @mcp.tool()
-def delete_campaign(campaign_id: str) -> str:
+def delete_campaign(campaign_id: str, account: str | None = None) -> str:
     """Permanently delete a campaign from the account.
 
     Use to remove unwanted draft or scheduled campaigns. Only works on campaigns that have not
@@ -1441,6 +1595,7 @@ def delete_campaign(campaign_id: str) -> str:
 
     Args:
         campaign_id: The campaign ID to delete (e.g. 'abc123def4'). Must not be a sent campaign.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: status ("deleted"), campaign_id. Returns error if the campaign has
@@ -1449,14 +1604,14 @@ def delete_campaign(campaign_id: str) -> str:
     Example:
         delete_campaign(campaign_id="abc123") -> {"status": "deleted", "campaign_id": "abc123"}
     """
-    if (guard := _guard_write(action="delete campaign", campaign_id=campaign_id)):
+    if (guard := _guard_write(action="delete campaign", campaign_id=campaign_id, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}", method="DELETE")
+    mc_request(f"/campaigns/{campaign_id}", method="DELETE", account=account)
     return json.dumps({"status": "deleted", "campaign_id": campaign_id}, indent=2)
 
 
 @mcp.tool()
-def send_campaign(campaign_id: str) -> str:
+def send_campaign(campaign_id: str, account: str | None = None) -> str:
     """Send a campaign immediately to all targeted recipients. Emails begin delivering within minutes.
 
     Use for immediate delivery. The campaign must have content set via set_campaign_content and be
@@ -1469,6 +1624,7 @@ def send_campaign(campaign_id: str) -> str:
     Args:
         campaign_id: The campaign ID to send (e.g. 'abc123def4'). Must be in 'save' status
             with content set. Obtain from create_campaign or list_campaigns(status='save').
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: status ("sent"), campaign_id. Returns error if the campaign has no
@@ -1477,14 +1633,14 @@ def send_campaign(campaign_id: str) -> str:
     Example:
         send_campaign(campaign_id="abc123") -> {"status": "sent", "campaign_id": "abc123"}
     """
-    if (guard := _guard_write(action="send campaign", campaign_id=campaign_id)):
+    if (guard := _guard_write(action="send campaign", campaign_id=campaign_id, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}/actions/send", method="POST")
+    mc_request(f"/campaigns/{campaign_id}/actions/send", method="POST", account=account)
     return json.dumps({"status": "sent", "campaign_id": campaign_id}, indent=2)
 
 
 @mcp.tool()
-def send_test_email(campaign_id: str, test_emails: str, send_type: str = "html") -> str:
+def send_test_email(campaign_id: str, test_emails: str, send_type: str = "html", account: str | None = None) -> str:
     """Send a test/preview email to specific addresses without affecting the real audience.
 
     Side effect: sends a real email. Tests do not count against send limits and are not tracked
@@ -1497,20 +1653,21 @@ def send_test_email(campaign_id: str, test_emails: str, send_type: str = "html")
         campaign_id: Campaign ID (e.g. 'abc123def4'). Must have content set.
         test_emails: Comma-separated emails (e.g. 'me@co.com,team@co.com'). Max 10 per request.
         send_type: Format: 'html' (default) or 'plaintext'.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ("test_sent"), campaign_id, test_emails array. Error if no content set.
     """
-    if (guard := _guard_write(action="send test email", campaign_id=campaign_id)):
+    if (guard := _guard_write(action="send test email", campaign_id=campaign_id, account=account)):
         return guard
     email_list = [e.strip() for e in test_emails.split(",")]
     body = {"test_emails": email_list, "send_type": send_type}
-    mc_request(f"/campaigns/{campaign_id}/actions/test", body=body, method="POST")
+    mc_request(f"/campaigns/{campaign_id}/actions/test", body=body, method="POST", account=account)
     return json.dumps({"status": "test_sent", "campaign_id": campaign_id, "test_emails": email_list}, indent=2)
 
 
 @mcp.tool()
-def cancel_send(campaign_id: str) -> str:
+def cancel_send(campaign_id: str, account: str | None = None) -> str:
     """Cancel a campaign mid-send, stopping delivery to remaining recipients.
 
     Only works on campaigns with status 'sending'. Already-delivered emails cannot be recalled.
@@ -1520,20 +1677,21 @@ def cancel_send(campaign_id: str) -> str:
 
     Args:
         campaign_id: Campaign ID (e.g. 'abc123def4'). Must be in 'sending' status.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ("cancelled"), campaign_id. Error if not currently sending.
     """
-    if (guard := _guard_write(action="cancel campaign send", campaign_id=campaign_id)):
+    if (guard := _guard_write(action="cancel campaign send", campaign_id=campaign_id, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}/actions/cancel-send", method="POST")
+    mc_request(f"/campaigns/{campaign_id}/actions/cancel-send", method="POST", account=account)
     return json.dumps({"status": "cancelled", "campaign_id": campaign_id}, indent=2)
 
 
 # --- Write Tools: Tags & Segments ---
 
 @mcp.tool()
-def create_segment(list_id: str, name: str, static: bool = True, match: Optional[str] = None, conditions_json: Optional[str] = None) -> str:
+def create_segment(list_id: str, name: str, static: bool = True, match: Optional[str] = None, conditions_json: Optional[str] = None, account: str | None = None) -> str:
     """Create a new segment or tag in an audience for grouping members.
 
     Static segments (default) have manual membership via add_members_to_segment. Dynamic segments
@@ -1548,11 +1706,12 @@ def create_segment(list_id: str, name: str, static: bool = True, match: Optional
         static: True (default) for manual membership; false for dynamic (requires match + conditions_json).
         match: Condition logic for dynamic segments: 'all' (AND) or 'any' (OR). Required when static=false.
         conditions_json: JSON conditions array for dynamic segments. Required when static=false.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id (new segment ID), name, member_count, type ('static'/'saved'), options.
     """
-    if (guard := _guard_write(action="create segment", list_id=list_id, name=name)):
+    if (guard := _guard_write(action="create segment", list_id=list_id, name=name, account=account)):
         return guard
     body: dict = {"name": name}
     if match and conditions_json:
@@ -1560,7 +1719,7 @@ def create_segment(list_id: str, name: str, static: bool = True, match: Optional
         body["options"] = {"match": match, "conditions": conditions}
     elif static:
         body["static_segment"] = []
-    data = mc_request(f"/lists/{list_id}/segments", body=body, method="POST")
+    data = mc_request(f"/lists/{list_id}/segments", body=body, method="POST", account=account)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -1571,7 +1730,7 @@ def create_segment(list_id: str, name: str, static: bool = True, match: Optional
 
 
 @mcp.tool()
-def delete_segment(list_id: str, segment_id: str) -> str:
+def delete_segment(list_id: str, segment_id: str, account: str | None = None) -> str:
     """Delete a segment or tag from an audience. Members remain in the audience.
 
     Irreversible. Use update_segment to rename or modify conditions instead of deleting. Use
@@ -1583,18 +1742,19 @@ def delete_segment(list_id: str, segment_id: str) -> str:
     Args:
         list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
         segment_id: Segment/tag ID to delete (numeric string, e.g. '12345'). Obtain from list_segments.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ("deleted"), segment_id.
     """
-    if (guard := _guard_write(action="delete segment", list_id=list_id, segment_id=segment_id)):
+    if (guard := _guard_write(action="delete segment", list_id=list_id, segment_id=segment_id, account=account)):
         return guard
-    mc_request(f"/lists/{list_id}/segments/{segment_id}", method="DELETE")
+    mc_request(f"/lists/{list_id}/segments/{segment_id}", method="DELETE", account=account)
     return json.dumps({"status": "deleted", "segment_id": segment_id}, indent=2)
 
 
 @mcp.tool()
-def add_members_to_segment(list_id: str, segment_id: str, emails: str) -> str:
+def add_members_to_segment(list_id: str, segment_id: str, emails: str, account: str | None = None) -> str:
     """Add members to a static segment or tag by email address.
 
     Only works on static segments (tags), not dynamic segments. Members must already exist in
@@ -1606,17 +1766,19 @@ def add_members_to_segment(list_id: str, segment_id: str, emails: str) -> str:
         list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
         segment_id: Static segment/tag ID (numeric string, e.g. '12345'). Obtain from list_segments.
         emails: Comma-separated emails to add (e.g. 'a@co.com,b@co.com'). Must exist in audience.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_added, total_removed (always 0), errors array.
     """
-    if (guard := _guard_write(action="add members to segment", list_id=list_id, segment_id=segment_id)):
+    if (guard := _guard_write(action="add members to segment", list_id=list_id, segment_id=segment_id, account=account)):
         return guard
     email_list = [e.strip() for e in emails.split(",")]
     data = mc_request(
         f"/lists/{list_id}/segments/{segment_id}",
         body={"members_to_add": email_list},
         method="POST",
+        account=account,
     )
     return json.dumps({
         "total_added": data.get("total_added"),
@@ -1626,7 +1788,7 @@ def add_members_to_segment(list_id: str, segment_id: str, emails: str) -> str:
 
 
 @mcp.tool()
-def remove_members_from_segment(list_id: str, segment_id: str, emails: str) -> str:
+def remove_members_from_segment(list_id: str, segment_id: str, emails: str, account: str | None = None) -> str:
     """Remove members from a static segment or tag. Members remain in the audience.
 
     Only works on static segments (tags), not dynamic segments. Non-existent members in the
@@ -1639,17 +1801,19 @@ def remove_members_from_segment(list_id: str, segment_id: str, emails: str) -> s
         list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
         segment_id: Static segment/tag ID (numeric string, e.g. '12345'). Obtain from list_segments.
         emails: Comma-separated email addresses to remove (e.g. 'a@co.com,b@co.com').
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_added (always 0), total_removed, errors array.
     """
-    if (guard := _guard_write(action="remove members from segment", list_id=list_id, segment_id=segment_id)):
+    if (guard := _guard_write(action="remove members from segment", list_id=list_id, segment_id=segment_id, account=account)):
         return guard
     email_list = [e.strip() for e in emails.split(",")]
     data = mc_request(
         f"/lists/{list_id}/segments/{segment_id}",
         body={"members_to_remove": email_list},
         method="POST",
+        account=account,
     )
     return json.dumps({
         "total_added": data.get("total_added"),
@@ -1659,7 +1823,7 @@ def remove_members_from_segment(list_id: str, segment_id: str, emails: str) -> s
 
 
 @mcp.tool()
-def update_segment(list_id: str, segment_id: str, name: Optional[str] = None, match: Optional[str] = None, conditions_json: Optional[str] = None) -> str:
+def update_segment(list_id: str, segment_id: str, name: Optional[str] = None, match: Optional[str] = None, conditions_json: Optional[str] = None, account: str | None = None) -> str:
     """Update a segment's name or dynamic filter conditions.
 
     Only provided fields are updated. Idempotent: re-applying the same name is safe. Cannot
@@ -1676,11 +1840,12 @@ def update_segment(list_id: str, segment_id: str, name: Optional[str] = None, ma
         match: Condition match type for dynamic segments: 'all' (AND) or 'any' (OR).
             Must be provided together with conditions_json.
         conditions_json: JSON string of conditions array. Must be provided with match.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, name, member_count, type ('static'/'saved'), options.
     """
-    if (guard := _guard_write(action="update segment", list_id=list_id, segment_id=segment_id)):
+    if (guard := _guard_write(action="update segment", list_id=list_id, segment_id=segment_id, account=account)):
         return guard
     body: dict = {}
     if name:
@@ -1688,7 +1853,7 @@ def update_segment(list_id: str, segment_id: str, name: Optional[str] = None, ma
     if match and conditions_json:
         conditions = json.loads(conditions_json)
         body["options"] = {"match": match, "conditions": conditions}
-    data = mc_request(f"/lists/{list_id}/segments/{segment_id}", body=body, method="PATCH")
+    data = mc_request(f"/lists/{list_id}/segments/{segment_id}", body=body, method="PATCH", account=account)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -1699,7 +1864,7 @@ def update_segment(list_id: str, segment_id: str, name: Optional[str] = None, ma
 
 
 @mcp.tool()
-def get_segment(list_id: str, segment_id: str) -> str:
+def get_segment(list_id: str, segment_id: str, account: str | None = None) -> str:
     """Retrieve full details of a specific segment including member count and filter conditions.
 
     Use to inspect a segment's conditions or verify its type and member count. Use list_segments
@@ -1710,6 +1875,7 @@ def get_segment(list_id: str, segment_id: str) -> str:
     Args:
         list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
         segment_id: The segment ID (numeric string, e.g. '12345'). Obtain from list_segments.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: id, name, member_count (int), type ('static' for tags, 'saved' for
@@ -1719,7 +1885,7 @@ def get_segment(list_id: str, segment_id: str) -> str:
     Example:
         get_segment(list_id="abc123", segment_id="12345") -> {"id": 12345, "name": "VIP", "member_count": 150, "type": "static", ...}
     """
-    data = mc_request(f"/lists/{list_id}/segments/{segment_id}")
+    data = mc_request(f"/lists/{list_id}/segments/{segment_id}", account=account)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -1732,7 +1898,7 @@ def get_segment(list_id: str, segment_id: str) -> str:
 
 
 @mcp.tool()
-def list_segment_members(list_id: str, segment_id: str, count: int = 20, offset: int = 0) -> str:
+def list_segment_members(list_id: str, segment_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """List individual members belonging to a specific segment or tag.
 
     Use to see who is in a segment. Use list_audience_members to browse all members of the full
@@ -1745,6 +1911,7 @@ def list_segment_members(list_id: str, segment_id: str, count: int = 20, offset:
         segment_id: The segment ID (numeric string, e.g. '12345'). Obtain from list_segments.
         count: Number of members to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and members array. Each member: id, email_address, status,
@@ -1753,7 +1920,7 @@ def list_segment_members(list_id: str, segment_id: str, count: int = 20, offset:
     Example:
         list_segment_members(list_id="abc123", segment_id="12345", count=50) -> {"total_items": 150, "members": [{"email_address": "jane@co.com", ...}]}
     """
-    data = mc_request(f"/lists/{list_id}/segments/{segment_id}/members", params={"count": count, "offset": offset})
+    data = mc_request(f"/lists/{list_id}/segments/{segment_id}/members", params={"count": count, "offset": offset}, account=account)
     members = []
     for m in data.get("members", []):
         members.append({
@@ -1769,7 +1936,7 @@ def list_segment_members(list_id: str, segment_id: str, count: int = 20, offset:
 # --- Read/Write Tools: Merge Fields ---
 
 @mcp.tool()
-def list_merge_fields(list_id: str, count: int = 50, offset: int = 0) -> str:
+def list_merge_fields(list_id: str, count: int = 50, offset: int = 0, account: str | None = None) -> str:
     """List merge fields (custom data fields) defined for an audience, including tags, types, and defaults.
 
     Use to discover available merge fields and their tag names before adding or updating members.
@@ -1783,6 +1950,7 @@ def list_merge_fields(list_id: str, count: int = 50, offset: int = 0) -> str:
         list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
         count: Number of merge fields to return (1-1000, default 50).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and merge_fields array. Each field: merge_id (int, use with
@@ -1793,7 +1961,7 @@ def list_merge_fields(list_id: str, count: int = 50, offset: int = 0) -> str:
     Example:
         list_merge_fields(list_id="abc123") -> {"total_items": 6, "merge_fields": [{"merge_id": 1, "tag": "FNAME", "name": "First Name", "type": "text", ...}]}
     """
-    data = mc_request(f"/lists/{list_id}/merge-fields", params={"count": count, "offset": offset})
+    data = mc_request(f"/lists/{list_id}/merge-fields", params={"count": count, "offset": offset}, account=account)
     fields = []
     for f in data.get("merge_fields", []):
         fields.append({
@@ -1809,7 +1977,7 @@ def list_merge_fields(list_id: str, count: int = 50, offset: int = 0) -> str:
 
 
 @mcp.tool()
-def create_merge_field(list_id: str, name: str, type: str, tag: Optional[str] = None, required: bool = False, default_value: Optional[str] = None, choices: Optional[str] = None) -> str:
+def create_merge_field(list_id: str, name: str, type: str, tag: Optional[str] = None, required: bool = False, default_value: Optional[str] = None, choices: Optional[str] = None, account: str | None = None) -> str:
     """Create a new custom merge field in an audience for storing additional member data.
 
     Use to add custom data fields beyond the defaults (FNAME, LNAME, ADDRESS, PHONE). Once
@@ -1829,6 +1997,7 @@ def create_merge_field(list_id: str, name: str, type: str, tag: Optional[str] = 
         default_value: Default value for new subscribers.
         choices: Comma-separated choices for 'dropdown' or 'radio' types (e.g. 'Small,Medium,Large').
             Required when type is 'dropdown' or 'radio'. Ignored for other types.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: merge_id (int, for update/delete), tag (string), name, type, required.
@@ -1836,7 +2005,7 @@ def create_merge_field(list_id: str, name: str, type: str, tag: Optional[str] = 
     Example:
         create_merge_field(list_id="abc123", name="Company", type="text", tag="COMPANY") -> {"merge_id": 5, "tag": "COMPANY", "name": "Company", "type": "text", ...}
     """
-    if (guard := _guard_write(action="create merge field", list_id=list_id, name=name, type=type)):
+    if (guard := _guard_write(action="create merge field", list_id=list_id, name=name, type=type, account=account)):
         return guard
     body: dict = {"name": name, "type": type, "required": required}
     if tag:
@@ -1845,7 +2014,7 @@ def create_merge_field(list_id: str, name: str, type: str, tag: Optional[str] = 
         body["default_value"] = default_value
     if choices:
         body["options"] = {"choices": [c.strip() for c in choices.split(",")]}
-    data = mc_request(f"/lists/{list_id}/merge-fields", body=body, method="POST")
+    data = mc_request(f"/lists/{list_id}/merge-fields", body=body, method="POST", account=account)
     return json.dumps({
         "merge_id": data.get("merge_id"),
         "tag": data.get("tag"),
@@ -1856,7 +2025,7 @@ def create_merge_field(list_id: str, name: str, type: str, tag: Optional[str] = 
 
 
 @mcp.tool()
-def update_merge_field(list_id: str, merge_id: str, name: Optional[str] = None, required: Optional[bool] = None, default_value: Optional[str] = None, choices: Optional[str] = None) -> str:
+def update_merge_field(list_id: str, merge_id: str, name: Optional[str] = None, required: Optional[bool] = None, default_value: Optional[str] = None, choices: Optional[str] = None, account: str | None = None) -> str:
     """Update a merge field's name, default value, required flag, or dropdown/radio choices.
 
     Only provided fields are updated; omitted fields remain unchanged. Choices are replaced
@@ -1874,11 +2043,12 @@ def update_merge_field(list_id: str, merge_id: str, name: Optional[str] = None, 
         default_value: New default value for new subscribers.
         choices: Comma-separated choices for dropdown/radio types (e.g. 'Small,Medium,Large').
             Replaces all existing choices. Ignored for other field types.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with merge_id, tag, name, type, required.
     """
-    if (guard := _guard_write(action="update merge field", list_id=list_id, merge_id=merge_id)):
+    if (guard := _guard_write(action="update merge field", list_id=list_id, merge_id=merge_id, account=account)):
         return guard
     body: dict = {}
     if name is not None:
@@ -1889,7 +2059,7 @@ def update_merge_field(list_id: str, merge_id: str, name: Optional[str] = None, 
         body["default_value"] = default_value
     if choices is not None:
         body["options"] = {"choices": [c.strip() for c in choices.split(",")]}
-    data = mc_request(f"/lists/{list_id}/merge-fields/{merge_id}", body=body, method="PATCH")
+    data = mc_request(f"/lists/{list_id}/merge-fields/{merge_id}", body=body, method="PATCH", account=account)
     return json.dumps({
         "merge_id": data.get("merge_id"),
         "tag": data.get("tag"),
@@ -1900,7 +2070,7 @@ def update_merge_field(list_id: str, merge_id: str, name: Optional[str] = None, 
 
 
 @mcp.tool()
-def delete_merge_field(list_id: str, merge_id: str) -> str:
+def delete_merge_field(list_id: str, merge_id: str, account: str | None = None) -> str:
     """Delete a custom merge field and all its stored data from an audience.
 
     Use only when you no longer need the field. All data stored in this field for every member
@@ -1913,6 +2083,7 @@ def delete_merge_field(list_id: str, merge_id: str) -> str:
         list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
         merge_id: The merge field ID to delete (numeric string). Obtain from list_merge_fields.
             Cannot be a default field.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: status ("deleted"), merge_id. Returns error if the field is a default
@@ -1921,16 +2092,16 @@ def delete_merge_field(list_id: str, merge_id: str) -> str:
     Example:
         delete_merge_field(list_id="abc123", merge_id="5") -> {"status": "deleted", "merge_id": "5"}
     """
-    if (guard := _guard_write(action="delete merge field", list_id=list_id, merge_id=merge_id)):
+    if (guard := _guard_write(action="delete merge field", list_id=list_id, merge_id=merge_id, account=account)):
         return guard
-    mc_request(f"/lists/{list_id}/merge-fields/{merge_id}", method="DELETE")
+    mc_request(f"/lists/{list_id}/merge-fields/{merge_id}", method="DELETE", account=account)
     return json.dumps({"status": "deleted", "merge_id": merge_id}, indent=2)
 
 
 # --- Read/Write Tools: Interest Categories & Groups ---
 
 @mcp.tool()
-def list_interest_categories(list_id: str, count: int = 50, offset: int = 0) -> str:
+def list_interest_categories(list_id: str, count: int = 50, offset: int = 0, account: str | None = None) -> str:
     """List interest categories (group containers) for an audience, showing titles and form types.
 
     Use to discover category IDs, then list_interests for options within each. Use
@@ -1942,12 +2113,13 @@ def list_interest_categories(list_id: str, count: int = 50, offset: int = 0) -> 
         list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
         count: Categories to return (1-1000, default 50).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and categories array. Each: id, title, type ('checkboxes'/'dropdown'/
         'radio'/'hidden'), list_id.
     """
-    data = mc_request(f"/lists/{list_id}/interest-categories", params={"count": count, "offset": offset})
+    data = mc_request(f"/lists/{list_id}/interest-categories", params={"count": count, "offset": offset}, account=account)
     categories = []
     for c in data.get("categories", []):
         categories.append({
@@ -1960,7 +2132,7 @@ def list_interest_categories(list_id: str, count: int = 50, offset: int = 0) -> 
 
 
 @mcp.tool()
-def create_interest_category(list_id: str, title: str, type: str) -> str:
+def create_interest_category(list_id: str, title: str, type: str, account: str | None = None) -> str:
     """Create a new interest category (group container) in an audience for organizing subscriber preferences.
 
     Use to create a container for interest options. Typical workflow: create_interest_category ->
@@ -1976,6 +2148,7 @@ def create_interest_category(list_id: str, title: str, type: str) -> str:
         type: How the category appears on signup forms. Valid values: 'checkboxes' (subscribers
             can select multiple), 'dropdown' (single select), 'radio' (single select), 'hidden'
             (not shown on forms, managed via API only).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: id (string, use with create_interest, list_interests,
@@ -1984,10 +2157,10 @@ def create_interest_category(list_id: str, title: str, type: str) -> str:
     Example:
         create_interest_category(list_id="abc123", title="Newsletter Preferences", type="checkboxes") -> {"id": "cat456", "title": "Newsletter Preferences", "type": "checkboxes", ...}
     """
-    if (guard := _guard_write(action="create interest category", list_id=list_id, title=title)):
+    if (guard := _guard_write(action="create interest category", list_id=list_id, title=title, account=account)):
         return guard
     body = {"title": title, "type": type}
-    data = mc_request(f"/lists/{list_id}/interest-categories", body=body, method="POST")
+    data = mc_request(f"/lists/{list_id}/interest-categories", body=body, method="POST", account=account)
     return json.dumps({
         "id": data.get("id"),
         "title": data.get("title"),
@@ -1997,7 +2170,7 @@ def create_interest_category(list_id: str, title: str, type: str) -> str:
 
 
 @mcp.tool()
-def list_interests(list_id: str, category_id: str, count: int = 50, offset: int = 0) -> str:
+def list_interests(list_id: str, category_id: str, count: int = 50, offset: int = 0, account: str | None = None) -> str:
     """List interest options within a category, with subscriber counts per option.
 
     Use after list_interest_categories to see individual options (e.g. "Tech", "Sports").
@@ -2012,11 +2185,12 @@ def list_interests(list_id: str, category_id: str, count: int = 50, offset: int 
         category_id: Interest category ID. Obtain from list_interest_categories.
         count: Number of interests to return (1-1000, default 50).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and interests array. Each interest: id, name, subscriber_count, display_order.
     """
-    data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests", params={"count": count, "offset": offset})
+    data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests", params={"count": count, "offset": offset}, account=account)
     interests = []
     for i in data.get("interests", []):
         interests.append({
@@ -2029,7 +2203,7 @@ def list_interests(list_id: str, category_id: str, count: int = 50, offset: int 
 
 
 @mcp.tool()
-def create_interest(list_id: str, category_id: str, name: str) -> str:
+def create_interest(list_id: str, category_id: str, name: str, account: str | None = None) -> str:
     """Create a new interest option within an interest category (e.g. add "Tech" to a "Topics" category).
 
     Use after create_interest_category to add selectable options. Each option becomes available
@@ -2044,6 +2218,7 @@ def create_interest(list_id: str, category_id: str, name: str) -> str:
             create_interest_category.
         name: Display name for the interest option (e.g. 'Tech', 'Sports'). Must be unique
             within the category.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: id (string, use with delete_interest), name, subscriber_count (int,
@@ -2052,10 +2227,10 @@ def create_interest(list_id: str, category_id: str, name: str) -> str:
     Example:
         create_interest(list_id="abc123", category_id="cat456", name="Technology") -> {"id": "int789", "name": "Technology", "subscriber_count": 0}
     """
-    if (guard := _guard_write(action="create interest", list_id=list_id, category_id=category_id, name=name)):
+    if (guard := _guard_write(action="create interest", list_id=list_id, category_id=category_id, name=name, account=account)):
         return guard
     body = {"name": name}
-    data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests", body=body, method="POST")
+    data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests", body=body, method="POST", account=account)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -2064,7 +2239,7 @@ def create_interest(list_id: str, category_id: str, name: str) -> str:
 
 
 @mcp.tool()
-def delete_interest_category(list_id: str, category_id: str) -> str:
+def delete_interest_category(list_id: str, category_id: str, account: str | None = None) -> str:
     """Delete an interest category and all its interest options at once.
 
     Removes the entire category with all its options. All subscriber associations with interests
@@ -2077,6 +2252,7 @@ def delete_interest_category(list_id: str, category_id: str) -> str:
     Args:
         list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
         category_id: The interest category ID to delete. Obtain from list_interest_categories.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: status ("deleted"), category_id. Returns error if category does
@@ -2085,14 +2261,14 @@ def delete_interest_category(list_id: str, category_id: str) -> str:
     Example:
         delete_interest_category(list_id="abc123", category_id="cat456") -> {"status": "deleted", "category_id": "cat456"}
     """
-    if (guard := _guard_write(action="delete interest category", list_id=list_id, category_id=category_id)):
+    if (guard := _guard_write(action="delete interest category", list_id=list_id, category_id=category_id, account=account)):
         return guard
-    mc_request(f"/lists/{list_id}/interest-categories/{category_id}", method="DELETE")
+    mc_request(f"/lists/{list_id}/interest-categories/{category_id}", method="DELETE", account=account)
     return json.dumps({"status": "deleted", "category_id": category_id}, indent=2)
 
 
 @mcp.tool()
-def delete_interest(list_id: str, category_id: str, interest_id: str) -> str:
+def delete_interest(list_id: str, category_id: str, interest_id: str, account: str | None = None) -> str:
     """Delete a single interest option from a category, keeping the category and other options intact.
 
     Use to remove one specific option. The interest and its subscriber associations are removed.
@@ -2104,6 +2280,7 @@ def delete_interest(list_id: str, category_id: str, interest_id: str) -> str:
         list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
         category_id: The interest category ID. Obtain from list_interest_categories.
         interest_id: The interest option ID to delete. Obtain from list_interests.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: status ("deleted"), interest_id. Returns error if interest does
@@ -2112,16 +2289,16 @@ def delete_interest(list_id: str, category_id: str, interest_id: str) -> str:
     Example:
         delete_interest(list_id="abc123", category_id="cat456", interest_id="int789") -> {"status": "deleted", "interest_id": "int789"}
     """
-    if (guard := _guard_write(action="delete interest", list_id=list_id, category_id=category_id, interest_id=interest_id)):
+    if (guard := _guard_write(action="delete interest", list_id=list_id, category_id=category_id, interest_id=interest_id, account=account)):
         return guard
-    mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests/{interest_id}", method="DELETE")
+    mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests/{interest_id}", method="DELETE", account=account)
     return json.dumps({"status": "deleted", "interest_id": interest_id}, indent=2)
 
 
 # --- Read/Write Tools: Webhooks ---
 
 @mcp.tool()
-def list_webhooks(list_id: str) -> str:
+def list_webhooks(list_id: str, account: str | None = None) -> str:
     """List webhooks configured for an audience, showing callback URLs, events, and source filters.
 
     Use to audit integrations or find webhook IDs before deleting via delete_webhook. Do not use
@@ -2131,13 +2308,14 @@ def list_webhooks(list_id: str) -> str:
 
     Args:
         list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and webhooks array. Each webhook: id, url, events (boolean flags:
         subscribe, unsubscribe, profile, cleaned, upemail, campaign), sources (boolean flags:
         user, admin, api), list_id.
     """
-    data = mc_request(f"/lists/{list_id}/webhooks")
+    data = mc_request(f"/lists/{list_id}/webhooks", account=account)
     webhooks = []
     for w in data.get("webhooks", []):
         webhooks.append({
@@ -2151,7 +2329,7 @@ def list_webhooks(list_id: str) -> str:
 
 
 @mcp.tool()
-def create_webhook(list_id: str, url: str, events: Optional[str] = None, sources: Optional[str] = None) -> str:
+def create_webhook(list_id: str, url: str, events: Optional[str] = None, sources: Optional[str] = None, account: str | None = None) -> str:
     """Create a webhook that sends HTTP POST notifications to an external URL on audience events.
 
     Side effect: Mailchimp sends a validation GET request during creation; the URL must be
@@ -2167,11 +2345,12 @@ def create_webhook(list_id: str, url: str, events: Optional[str] = None, sources
         events: Comma-separated events: 'subscribe', 'unsubscribe', 'profile', 'cleaned',
             'upemail', 'campaign'. All enabled if omitted.
         sources: Comma-separated sources: 'user', 'admin', 'api'. All enabled if omitted.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, url, events (boolean flags), sources (boolean flags). Error if URL validation fails.
     """
-    if (guard := _guard_write(action="create webhook", list_id=list_id, url=url)):
+    if (guard := _guard_write(action="create webhook", list_id=list_id, url=url, account=account)):
         return guard
     body: dict = {"url": url}
     if events:
@@ -2180,7 +2359,7 @@ def create_webhook(list_id: str, url: str, events: Optional[str] = None, sources
     if sources:
         source_list = [s.strip() for s in sources.split(",")]
         body["sources"] = {s: True for s in source_list}
-    data = mc_request(f"/lists/{list_id}/webhooks", body=body, method="POST")
+    data = mc_request(f"/lists/{list_id}/webhooks", body=body, method="POST", account=account)
     return json.dumps({
         "id": data.get("id"),
         "url": data.get("url"),
@@ -2190,7 +2369,7 @@ def create_webhook(list_id: str, url: str, events: Optional[str] = None, sources
 
 
 @mcp.tool()
-def delete_webhook(list_id: str, webhook_id: str) -> str:
+def delete_webhook(list_id: str, webhook_id: str, account: str | None = None) -> str:
     """Delete a webhook, immediately stopping event notifications to its URL.
 
     Irreversible. Do not use when you want to temporarily pause notifications; webhooks have
@@ -2202,20 +2381,21 @@ def delete_webhook(list_id: str, webhook_id: str) -> str:
     Args:
         list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
         webhook_id: The webhook ID to delete. Obtain from list_webhooks.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ("deleted"), webhook_id.
     """
-    if (guard := _guard_write(action="delete webhook", list_id=list_id, webhook_id=webhook_id)):
+    if (guard := _guard_write(action="delete webhook", list_id=list_id, webhook_id=webhook_id, account=account)):
         return guard
-    mc_request(f"/lists/{list_id}/webhooks/{webhook_id}", method="DELETE")
+    mc_request(f"/lists/{list_id}/webhooks/{webhook_id}", method="DELETE", account=account)
     return json.dumps({"status": "deleted", "webhook_id": webhook_id}, indent=2)
 
 
 # --- Read Tools: Detailed Reports ---
 
 @mcp.tool()
-def get_email_activity(campaign_id: str, count: int = 20, offset: int = 0) -> str:
+def get_email_activity(campaign_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """Retrieve per-recipient activity timeline for a sent campaign (opens, clicks, bounces).
 
     Use get_open_details for open data only. Use get_campaign_report for aggregate totals. Use
@@ -2227,12 +2407,13 @@ def get_email_activity(campaign_id: str, count: int = 20, offset: int = 0) -> st
         campaign_id: Campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
         count: Recipient records to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and emails array. Each: email_address, activity array with action
         ('open'/'click'/'bounce'), timestamp, url (clicks only).
     """
-    data = mc_request(f"/reports/{campaign_id}/email-activity", params={"count": count, "offset": offset})
+    data = mc_request(f"/reports/{campaign_id}/email-activity", params={"count": count, "offset": offset}, account=account)
     emails = []
     for e in data.get("emails", []):
         emails.append({
@@ -2243,7 +2424,7 @@ def get_email_activity(campaign_id: str, count: int = 20, offset: int = 0) -> st
 
 
 @mcp.tool()
-def get_open_details(campaign_id: str, count: int = 20, offset: int = 0) -> str:
+def get_open_details(campaign_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """Retrieve per-recipient open data for a sent campaign (who opened, when, how many times).
 
     Use get_campaign_report for aggregate open rates. Use get_email_activity for all activity
@@ -2255,12 +2436,13 @@ def get_open_details(campaign_id: str, count: int = 20, offset: int = 0) -> str:
         campaign_id: Campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
         count: Records to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and members array. Each: email_address, opens_count, opens array
         with timestamps.
     """
-    data = mc_request(f"/reports/{campaign_id}/open-details", params={"count": count, "offset": offset})
+    data = mc_request(f"/reports/{campaign_id}/open-details", params={"count": count, "offset": offset}, account=account)
     members = []
     for m in data.get("members", []):
         members.append({
@@ -2272,7 +2454,7 @@ def get_open_details(campaign_id: str, count: int = 20, offset: int = 0) -> str:
 
 
 @mcp.tool()
-def get_campaign_recipients(campaign_id: str, count: int = 20, offset: int = 0) -> str:
+def get_campaign_recipients(campaign_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """Retrieve the delivery roster for a sent campaign showing each recipient's delivery status and open count.
 
     Use to verify who received a campaign and whether they opened it. Use get_email_activity for
@@ -2285,6 +2467,7 @@ def get_campaign_recipients(campaign_id: str, count: int = 20, offset: int = 0) 
         campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
         count: Number of recipients to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items (int) and recipients array. Each recipient: email_address,
@@ -2293,7 +2476,7 @@ def get_campaign_recipients(campaign_id: str, count: int = 20, offset: int = 0) 
     Example:
         get_campaign_recipients(campaign_id="abc123", count=100) -> {"total_items": 5000, "recipients": [{"email_address": "jane@co.com", "status": "sent", "open_count": 3, ...}]}
     """
-    data = mc_request(f"/reports/{campaign_id}/sent-to", params={"count": count, "offset": offset})
+    data = mc_request(f"/reports/{campaign_id}/sent-to", params={"count": count, "offset": offset}, account=account)
     recipients = []
     for r in data.get("sent_to", []):
         recipients.append({
@@ -2306,7 +2489,7 @@ def get_campaign_recipients(campaign_id: str, count: int = 20, offset: int = 0) 
 
 
 @mcp.tool()
-def get_campaign_unsubscribes(campaign_id: str, count: int = 20, offset: int = 0) -> str:
+def get_campaign_unsubscribes(campaign_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """Retrieve members who unsubscribed from a specific sent campaign, with reasons.
 
     Use get_campaign_report for aggregate unsubscribe count instead.
@@ -2318,12 +2501,13 @@ def get_campaign_unsubscribes(campaign_id: str, count: int = 20, offset: int = 0
         campaign_id: Campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
         count: Records to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and unsubscribes array. Each: email_address, reason (string or null),
         timestamp.
     """
-    data = mc_request(f"/reports/{campaign_id}/unsubscribed", params={"count": count, "offset": offset})
+    data = mc_request(f"/reports/{campaign_id}/unsubscribed", params={"count": count, "offset": offset}, account=account)
     unsubs = []
     for u in data.get("unsubscribes", []):
         unsubs.append({
@@ -2335,7 +2519,7 @@ def get_campaign_unsubscribes(campaign_id: str, count: int = 20, offset: int = 0
 
 
 @mcp.tool()
-def get_domain_performance(campaign_id: str) -> str:
+def get_domain_performance(campaign_id: str, account: str | None = None) -> str:
     """Retrieve campaign performance broken down by recipient email domain (gmail.com, outlook.com, etc.).
 
     Use to identify deliverability issues with specific providers or compare engagement across
@@ -2345,6 +2529,7 @@ def get_domain_performance(campaign_id: str) -> str:
 
     Args:
         campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and domains array. Each domain: domain (string, e.g. 'gmail.com'),
@@ -2353,7 +2538,7 @@ def get_domain_performance(campaign_id: str) -> str:
     Example:
         get_domain_performance(campaign_id="abc123") -> {"total_items": 15, "domains": [{"domain": "gmail.com", "emails_sent": 2000, "opens": 500, "clicks": 80, ...}]}
     """
-    data = mc_request(f"/reports/{campaign_id}/domain-performance")
+    data = mc_request(f"/reports/{campaign_id}/domain-performance", account=account)
     domains = []
     for d in data.get("domains", []):
         domains.append({
@@ -2368,7 +2553,7 @@ def get_domain_performance(campaign_id: str) -> str:
 
 
 @mcp.tool()
-def get_campaign_advice(campaign_id: str) -> str:
+def get_campaign_advice(campaign_id: str, account: str | None = None) -> str:
     """Retrieve Mailchimp's automated post-send feedback on a campaign (subject line, content, engagement tips).
 
     Use to surface algorithmic suggestions Mailchimp makes after looking at how a campaign
@@ -2381,12 +2566,13 @@ def get_campaign_advice(campaign_id: str) -> str:
 
     Args:
         campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and advice array. Each entry: type ('positive' | 'negative' |
         'neutral'), message (string, the advice text).
     """
-    data = mc_request(f"/reports/{campaign_id}/advice")
+    data = mc_request(f"/reports/{campaign_id}/advice", account=account)
     advice = []
     for a in data.get("advice", []):
         advice.append({"type": a.get("type"), "message": a.get("message")})
@@ -2394,7 +2580,7 @@ def get_campaign_advice(campaign_id: str) -> str:
 
 
 @mcp.tool()
-def get_campaign_locations(campaign_id: str, count: int = 20, offset: int = 0) -> str:
+def get_campaign_locations(campaign_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """Retrieve geographic open data for a sent campaign, broken down by country and region.
 
     Use to map where opens happened — useful for region-targeted follow-ups, timezone-aware
@@ -2407,13 +2593,14 @@ def get_campaign_locations(campaign_id: str, count: int = 20, offset: int = 0) -
         campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
         count: Number of locations to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and locations array. Each entry: country_code (ISO 2-letter,
         e.g. 'US'), region (string, state/province name or code), region_name (full name),
         opens (int, opens from that region).
     """
-    data = mc_request(f"/reports/{campaign_id}/locations", params={"count": count, "offset": offset})
+    data = mc_request(f"/reports/{campaign_id}/locations", params={"count": count, "offset": offset}, account=account)
     locations = []
     for loc in data.get("locations", []):
         locations.append({
@@ -2426,7 +2613,7 @@ def get_campaign_locations(campaign_id: str, count: int = 20, offset: int = 0) -
 
 
 @mcp.tool()
-def get_eepurl_activity(campaign_id: str) -> str:
+def get_eepurl_activity(campaign_id: str, account: str | None = None) -> str:
     """Retrieve social sharing stats for a campaign's eepurl (Mailchimp's short-URL share link).
 
     Use to measure how much the campaign was shared on Twitter/Facebook/etc. via the
@@ -2437,13 +2624,14 @@ def get_eepurl_activity(campaign_id: str) -> str:
 
     Args:
         campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with eepurl (the short URL), twitter (object with statuses, first_status,
         last_status, replies, impressions, retweets), facebook (object with likes, recipient_likes,
         unique_likes), referrers array (list of {referrer, clicks, first_click, last_click}).
     """
-    data = mc_request(f"/reports/{campaign_id}/eepurl")
+    data = mc_request(f"/reports/{campaign_id}/eepurl", account=account)
     return json.dumps({
         "eepurl": data.get("eepurl"),
         "twitter": data.get("twitter"),
@@ -2453,7 +2641,7 @@ def get_eepurl_activity(campaign_id: str) -> str:
 
 
 @mcp.tool()
-def get_ecommerce_product_activity(campaign_id: str, count: int = 20, offset: int = 0) -> str:
+def get_ecommerce_product_activity(campaign_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """Retrieve e-commerce product activity for a campaign showing revenue per product.
 
     Requires an active e-commerce integration; returns total_items: 0 if none is connected.
@@ -2466,12 +2654,13 @@ def get_ecommerce_product_activity(campaign_id: str, count: int = 20, offset: in
         campaign_id: Campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
         count: Products to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and products array. Each: title, sku, image_url, total_revenue
         (float, store currency), total_purchased.
     """
-    data = mc_request(f"/reports/{campaign_id}/ecommerce-product-activity", params={"count": count, "offset": offset})
+    data = mc_request(f"/reports/{campaign_id}/ecommerce-product-activity", params={"count": count, "offset": offset}, account=account)
     products = []
     for p in data.get("products", []):
         products.append({
@@ -2485,7 +2674,7 @@ def get_ecommerce_product_activity(campaign_id: str, count: int = 20, offset: in
 
 
 @mcp.tool()
-def get_campaign_sub_reports(campaign_id: str) -> str:
+def get_campaign_sub_reports(campaign_id: str, account: str | None = None) -> str:
     """Retrieve child report data for A/B test, variate, or RSS campaign sub-items.
 
     Read-only, no side effects. Returns empty data for regular campaigns; use get_campaign_report
@@ -2496,19 +2685,20 @@ def get_campaign_sub_reports(campaign_id: str) -> str:
     Args:
         campaign_id: Campaign ID (e.g. 'abc123def4'). Should be type 'absplit', 'variate', or
             'rss'. Obtain from list_campaigns.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with sub-reports. Format varies: A/B tests include per-variant opens, clicks, winner;
         RSS includes per-item send stats with dates.
     """
-    data = mc_request(f"/reports/{campaign_id}/sub-reports")
+    data = mc_request(f"/reports/{campaign_id}/sub-reports", account=account)
     return json.dumps(data, indent=2)
 
 
 # --- Read Tools: Member Activity ---
 
 @mcp.tool()
-def get_member_activity(list_id: str, email_address: str, count: int = 20) -> str:
+def get_member_activity(list_id: str, email_address: str, count: int = 20, account: str | None = None) -> str:
     """Retrieve a member's email interaction history (opens, clicks, bounces across all campaigns).
 
     Shows email actions only. Use get_member_events for custom API-triggered events. Use
@@ -2521,13 +2711,14 @@ def get_member_activity(list_id: str, email_address: str, count: int = 20) -> st
         list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
         email_address: Email of the member. Must exist in the audience.
         count: Number of activity records to return (1-1000, default 20).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with email_address and activity array. Each: action ('open'/'click'/'bounce'),
         timestamp, campaign_id, title.
     """
     subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
-    data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/activity", params={"count": count})
+    data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/activity", params={"count": count}, account=account)
     activities = []
     for a in data.get("activity", []):
         activities.append({
@@ -2540,7 +2731,7 @@ def get_member_activity(list_id: str, email_address: str, count: int = 20) -> st
 
 
 @mcp.tool()
-def get_member_tags(list_id: str, email_address: str, count: int = 50) -> str:
+def get_member_tags(list_id: str, email_address: str, count: int = 50, account: str | None = None) -> str:
     """Retrieve all tags currently assigned to a specific member.
 
     Use to see which tags a member has before modifying them. Use tag_member to add or remove tags.
@@ -2552,6 +2743,7 @@ def get_member_tags(list_id: str, email_address: str, count: int = 50) -> str:
         list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
         email_address: Email address of the member. Must exist in the audience.
         count: Number of tags to return (1-1000, default 50).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with email_address, total_items (int), and tags array. Each tag: id (int),
@@ -2561,7 +2753,7 @@ def get_member_tags(list_id: str, email_address: str, count: int = 50) -> str:
         get_member_tags(list_id="abc123", email_address="jane@co.com") -> {"email_address": "jane@co.com", "total_items": 3, "tags": [{"name": "VIP", "date_added": "2025-01-15T10:00:00Z", ...}]}
     """
     subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
-    data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/tags", params={"count": count})
+    data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/tags", params={"count": count}, account=account)
     tags = []
     for t in data.get("tags", []):
         tags.append({
@@ -2573,7 +2765,7 @@ def get_member_tags(list_id: str, email_address: str, count: int = 50) -> str:
 
 
 @mcp.tool()
-def get_member_events(list_id: str, email_address: str, count: int = 20) -> str:
+def get_member_events(list_id: str, email_address: str, count: int = 20, account: str | None = None) -> str:
     """Retrieve custom API-triggered events for a specific member (e.g. "purchased", "signed_up").
 
     Use to view events sent to Mailchimp via the Events API. These are custom application events,
@@ -2586,6 +2778,7 @@ def get_member_events(list_id: str, email_address: str, count: int = 20) -> str:
         list_id: The Mailchimp audience/list ID (e.g. 'abc123def4'). Obtain from list_audiences.
         email_address: Email address of the member. Must exist in the audience.
         count: Number of events to return (1-1000, default 20).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with email_address, total_items (int), and events array. Each event: name (string,
@@ -2595,7 +2788,7 @@ def get_member_events(list_id: str, email_address: str, count: int = 20) -> str:
         get_member_events(list_id="abc123", email_address="jane@co.com") -> {"email_address": "jane@co.com", "total_items": 5, "events": [{"name": "purchased", "occurred_at": "2025-06-01T10:00:00Z", "properties": {"product": "T-Shirt"}}]}
     """
     subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
-    data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/events", params={"count": count})
+    data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/events", params={"count": count}, account=account)
     events = []
     for e in data.get("events", []):
         events.append({
@@ -2607,7 +2800,7 @@ def get_member_events(list_id: str, email_address: str, count: int = 20) -> str:
 
 
 @mcp.tool()
-def get_member_journey_events(list_id: str, email_address: str, count: int = 50) -> str:
+def get_member_journey_events(list_id: str, email_address: str, count: int = 50, account: str | None = None) -> str:
     """Retrieve a member's activity events filtered to automation- and journey-related actions.
 
     Returns the subset of the member's activity feed that relates to Classic Automations and
@@ -2626,6 +2819,7 @@ def get_member_journey_events(list_id: str, email_address: str, count: int = 50)
         email_address: Email of the member. Must exist in the audience.
         count: Number of activity rows to scan before filtering (1-1000, default 50). Raise if
             the member is highly active and you suspect automation events are missed.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with email_address, scanned (raw row count looked at), total_journey_events (after
@@ -2636,6 +2830,7 @@ def get_member_journey_events(list_id: str, email_address: str, count: int = 50)
     data = mc_request(
         f"/lists/{list_id}/members/{subscriber_hash}/activity-feed",
         params={"count": count},
+        account=account,
     )
     automation_keywords = ("automation", "journey")
     filtered = []
@@ -2661,7 +2856,7 @@ def get_member_journey_events(list_id: str, email_address: str, count: int = 50)
 # --- Read/Write Tools: Member Notes ---
 
 @mcp.tool()
-def list_member_notes(list_id: str, email_address: str, count: int = 20, offset: int = 0) -> str:
+def list_member_notes(list_id: str, email_address: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """List CRM-style notes attached to a member by team members (not visible to the contact).
 
     Notes are internal annotations like "Called about pricing" or "VIP customer". They are not
@@ -2676,6 +2871,7 @@ def list_member_notes(list_id: str, email_address: str, count: int = 20, offset:
         email_address: Email of the member whose notes to list. Must exist in the audience.
         count: Number of notes to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with email_address, total_items, and notes array. Each note: id (use as note_id),
@@ -2685,6 +2881,7 @@ def list_member_notes(list_id: str, email_address: str, count: int = 20, offset:
     data = mc_request(
         f"/lists/{list_id}/members/{subscriber_hash}/notes",
         params={"count": count, "offset": offset},
+        account=account,
     )
     notes = []
     for n in data.get("notes", []):
@@ -2703,7 +2900,7 @@ def list_member_notes(list_id: str, email_address: str, count: int = 20, offset:
 
 
 @mcp.tool()
-def add_member_note(list_id: str, email_address: str, note: str) -> str:
+def add_member_note(list_id: str, email_address: str, note: str, account: str | None = None) -> str:
     """Add a CRM-style internal note to a member. Not sent to the contact.
 
     Useful for sales/support context, e.g. "Asked for discount on annual plan", "Out of office
@@ -2716,17 +2913,19 @@ def add_member_note(list_id: str, email_address: str, note: str) -> str:
         list_id: Audience/list ID. Obtain from list_audiences.
         email_address: Email of the member to attach the note to. Must exist in the audience.
         note: Note text (max 1000 chars). Plain text; markdown is not rendered in the Mailchimp UI.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id (use as note_id), email_address, note, created_at, created_by.
     """
-    if (guard := _guard_write(action="add member note", list_id=list_id, email_address=email_address)):
+    if (guard := _guard_write(action="add member note", list_id=list_id, email_address=email_address, account=account)):
         return guard
     subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
     data = mc_request(
         f"/lists/{list_id}/members/{subscriber_hash}/notes",
         body={"note": note},
         method="POST",
+        account=account,
     )
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
@@ -2740,7 +2939,7 @@ def add_member_note(list_id: str, email_address: str, note: str) -> str:
 
 
 @mcp.tool()
-def update_member_note(list_id: str, email_address: str, note_id: str, note: str) -> str:
+def update_member_note(list_id: str, email_address: str, note_id: str, note: str, account: str | None = None) -> str:
     """Update the text of an existing member note. Replaces the entire note body.
 
     Use list_member_notes to find note_ids. Use add_member_note instead to create a new note
@@ -2754,17 +2953,19 @@ def update_member_note(list_id: str, email_address: str, note_id: str, note: str
         email_address: Email of the member who owns the note.
         note_id: Note ID to update. Obtain from list_member_notes.
         note: New note text (max 1000 chars). Replaces the previous text entirely.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, email_address, note (new value), updated_at.
     """
-    if (guard := _guard_write(action="update member note", list_id=list_id, email_address=email_address, note_id=note_id)):
+    if (guard := _guard_write(action="update member note", list_id=list_id, email_address=email_address, note_id=note_id, account=account)):
         return guard
     subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
     data = mc_request(
         f"/lists/{list_id}/members/{subscriber_hash}/notes/{note_id}",
         body={"note": note},
         method="PATCH",
+        account=account,
     )
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
@@ -2777,7 +2978,7 @@ def update_member_note(list_id: str, email_address: str, note_id: str, note: str
 
 
 @mcp.tool()
-def delete_member_note(list_id: str, email_address: str, note_id: str) -> str:
+def delete_member_note(list_id: str, email_address: str, note_id: str, account: str | None = None) -> str:
     """Permanently delete a note attached to a member. Cannot be undone.
 
     Use list_member_notes to find note_ids before calling. Does not affect the member itself,
@@ -2790,16 +2991,18 @@ def delete_member_note(list_id: str, email_address: str, note_id: str) -> str:
         list_id: Audience/list ID. Obtain from list_audiences.
         email_address: Email of the member who owns the note.
         note_id: Note ID to delete. Obtain from list_member_notes.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ('deleted'), email_address, note_id on success.
     """
-    if (guard := _guard_write(action="delete member note", list_id=list_id, email_address=email_address, note_id=note_id)):
+    if (guard := _guard_write(action="delete member note", list_id=list_id, email_address=email_address, note_id=note_id, account=account)):
         return guard
     subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
     result = mc_request(
         f"/lists/{list_id}/members/{subscriber_hash}/notes/{note_id}",
         method="DELETE",
+        account=account,
     )
     if isinstance(result, dict) and "error" in result:
         return json.dumps(result, indent=2)
@@ -2809,7 +3012,7 @@ def delete_member_note(list_id: str, email_address: str, note_id: str) -> str:
 # --- Read/Write Tools: Automations (granular) ---
 
 @mcp.tool()
-def get_automation_emails(automation_id: str) -> str:
+def get_automation_emails(automation_id: str, account: str | None = None) -> str:
     """List individual emails within an automation workflow with sequence, delays, and send counts.
 
     Returns all emails regardless of status. Do not confuse with get_email_activity (campaign
@@ -2819,12 +3022,13 @@ def get_automation_emails(automation_id: str) -> str:
 
     Args:
         automation_id: Automation workflow ID (e.g. 'auto123'). Obtain from list_automations.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and emails array. Each email: id, position (sequence starting at 1),
         status ('sending'/'paused'/'draft'), subject_line, title, emails_sent, send_time, delay.
     """
-    data = mc_request(f"/automations/{automation_id}/emails")
+    data = mc_request(f"/automations/{automation_id}/emails", account=account)
     emails = []
     for e in data.get("emails", []):
         emails.append({
@@ -2841,7 +3045,7 @@ def get_automation_emails(automation_id: str) -> str:
 
 
 @mcp.tool()
-def get_automation_email_queue(automation_id: str, email_id: str) -> str:
+def get_automation_email_queue(automation_id: str, email_id: str, account: str | None = None) -> str:
     """Retrieve the queue of subscribers about to receive a specific automation email, with scheduled send times.
 
     Use to see who is waiting to receive a particular email in a workflow. Use
@@ -2852,6 +3056,7 @@ def get_automation_email_queue(automation_id: str, email_id: str) -> str:
     Args:
         automation_id: The automation workflow ID (e.g. 'auto123'). Obtain from list_automations.
         email_id: The specific email ID within the automation. Obtain from get_automation_emails.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items (int) and queue array. Each entry: email_address (string),
@@ -2860,7 +3065,7 @@ def get_automation_email_queue(automation_id: str, email_id: str) -> str:
     Example:
         get_automation_email_queue(automation_id="auto123", email_id="email456") -> {"total_items": 12, "queue": [{"email_address": "jane@co.com", "next_send": "2025-06-02T10:00:00Z"}]}
     """
-    data = mc_request(f"/automations/{automation_id}/emails/{email_id}/queue")
+    data = mc_request(f"/automations/{automation_id}/emails/{email_id}/queue", account=account)
     queue = []
     for q in data.get("queue", []):
         queue.append({
@@ -2871,7 +3076,7 @@ def get_automation_email_queue(automation_id: str, email_id: str) -> str:
 
 
 @mcp.tool()
-def pause_automation(automation_id: str) -> str:
+def pause_automation(automation_id: str, account: str | None = None) -> str:
     """Pause an automation workflow, stopping delivery while preserving the queue.
 
     Queued subscribers resume when restarted via start_automation. New subscribers still enter
@@ -2881,18 +3086,19 @@ def pause_automation(automation_id: str) -> str:
 
     Args:
         automation_id: Automation workflow ID (e.g. 'auto123'). Obtain from list_automations.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ("paused"), automation_id. Error if already paused or in draft status.
     """
-    if (guard := _guard_write(action="pause automation", automation_id=automation_id)):
+    if (guard := _guard_write(action="pause automation", automation_id=automation_id, account=account)):
         return guard
-    mc_request(f"/automations/{automation_id}/actions/pause-all-emails", method="POST")
+    mc_request(f"/automations/{automation_id}/actions/pause-all-emails", method="POST", account=account)
     return json.dumps({"status": "paused", "automation_id": automation_id}, indent=2)
 
 
 @mcp.tool()
-def start_automation(automation_id: str) -> str:
+def start_automation(automation_id: str, account: str | None = None) -> str:
     """Start or resume all emails in an automation workflow, activating delivery to queued subscribers.
 
     Use to activate a new automation or resume a paused one. Queued subscribers begin receiving
@@ -2902,6 +3108,7 @@ def start_automation(automation_id: str) -> str:
 
     Args:
         automation_id: The automation workflow ID (e.g. 'auto123'). Obtain from list_automations.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: status ("started"), automation_id. Returns error if automation is
@@ -2910,16 +3117,16 @@ def start_automation(automation_id: str) -> str:
     Example:
         start_automation(automation_id="auto123") -> {"status": "started", "automation_id": "auto123"}
     """
-    if (guard := _guard_write(action="start automation", automation_id=automation_id)):
+    if (guard := _guard_write(action="start automation", automation_id=automation_id, account=account)):
         return guard
-    mc_request(f"/automations/{automation_id}/actions/start-all-emails", method="POST")
+    mc_request(f"/automations/{automation_id}/actions/start-all-emails", method="POST", account=account)
     return json.dumps({"status": "started", "automation_id": automation_id}, indent=2)
 
 
 # --- Read Tools: Landing Pages ---
 
 @mcp.tool()
-def list_landing_pages(count: int = 20, offset: int = 0) -> str:
+def list_landing_pages(count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """List landing pages with publication status, URLs, and associated audiences.
 
     Landing pages are standalone web pages, not emails. Use get_landing_page for full details.
@@ -2930,12 +3137,13 @@ def list_landing_pages(count: int = 20, offset: int = 0) -> str:
     Args:
         count: Landing pages to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and landing_pages array. Each: id, name, title, status
         ('published'/'unpublished'/'draft'), url (null if not published), published_at, created_at, list_id.
     """
-    data = mc_request("/landing-pages", params={"count": count, "offset": offset})
+    data = mc_request("/landing-pages", params={"count": count, "offset": offset}, account=account)
     pages = []
     for p in data.get("landing_pages", []):
         pages.append({
@@ -2952,7 +3160,7 @@ def list_landing_pages(count: int = 20, offset: int = 0) -> str:
 
 
 @mcp.tool()
-def get_landing_page(page_id: str) -> str:
+def get_landing_page(page_id: str, account: str | None = None) -> str:
     """Retrieve full details of a landing page including description and tracking settings.
 
     Use list_landing_pages to browse all pages and discover page IDs.
@@ -2962,12 +3170,13 @@ def get_landing_page(page_id: str) -> str:
 
     Args:
         page_id: Landing page ID (alphanumeric string). Obtain from list_landing_pages.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, name, title, description, status ('published'/'unpublished'/'draft'), url,
         published_at, created_at, updated_at, list_id, tracking.
     """
-    data = mc_request(f"/landing-pages/{page_id}")
+    data = mc_request(f"/landing-pages/{page_id}", account=account)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -2986,7 +3195,7 @@ def get_landing_page(page_id: str) -> str:
 # --- Write Tools: Landing Pages ---
 
 @mcp.tool()
-def create_landing_page(name: str, title: str, list_id: str, template_id: str, store_id: Optional[str] = None, description: Optional[str] = None, tracking_opens: bool = True, tracking_clicks: bool = True) -> str:
+def create_landing_page(name: str, title: str, list_id: str, template_id: str, store_id: Optional[str] = None, description: Optional[str] = None, tracking_opens: bool = True, tracking_clicks: bool = True, account: str | None = None) -> str:
     """Create a new landing page in draft status from a template, optionally linked to a store.
 
     The page is created unpublished. Use update_landing_page to edit settings or
@@ -3007,12 +3216,13 @@ def create_landing_page(name: str, title: str, list_id: str, template_id: str, s
         description: Optional internal description.
         tracking_opens: Track view-opens analytics. Default true.
         tracking_clicks: Track link clicks analytics. Default true.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id (use as page_id for subsequent calls), name, title, status ('unpublished'),
         url (null until published), created_at, list_id.
     """
-    if (guard := _guard_write(action="create landing page", name=name, list_id=list_id)):
+    if (guard := _guard_write(action="create landing page", name=name, list_id=list_id, account=account)):
         return guard
     body: dict = {
         "name": name,
@@ -3025,7 +3235,7 @@ def create_landing_page(name: str, title: str, list_id: str, template_id: str, s
         body["store_id"] = store_id
     if description:
         body["description"] = description
-    data = mc_request("/landing-pages", body=body, method="POST")
+    data = mc_request("/landing-pages", body=body, method="POST", account=account)
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
     return json.dumps({
@@ -3040,7 +3250,7 @@ def create_landing_page(name: str, title: str, list_id: str, template_id: str, s
 
 
 @mcp.tool()
-def update_landing_page(page_id: str, name: Optional[str] = None, title: Optional[str] = None, description: Optional[str] = None, tracking_opens: Optional[bool] = None, tracking_clicks: Optional[bool] = None) -> str:
+def update_landing_page(page_id: str, name: Optional[str] = None, title: Optional[str] = None, description: Optional[str] = None, tracking_opens: Optional[bool] = None, tracking_clicks: Optional[bool] = None, account: str | None = None) -> str:
     """Update settings of an existing landing page. Only provided fields are changed.
 
     Cannot change list_id or template after creation; create a new page instead. Use
@@ -3057,11 +3267,12 @@ def update_landing_page(page_id: str, name: Optional[str] = None, title: Optiona
         description: New internal description.
         tracking_opens: Toggle open tracking on/off.
         tracking_clicks: Toggle click tracking on/off.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, name, title, status, url, updated_at, list_id.
     """
-    if (guard := _guard_write(action="update landing page", page_id=page_id)):
+    if (guard := _guard_write(action="update landing page", page_id=page_id, account=account)):
         return guard
     body: dict = {}
     if name is not None:
@@ -3077,7 +3288,7 @@ def update_landing_page(page_id: str, name: Optional[str] = None, title: Optiona
         tracking["clicks"] = tracking_clicks
     if tracking:
         body["tracking"] = tracking
-    data = mc_request(f"/landing-pages/{page_id}", body=body, method="PATCH")
+    data = mc_request(f"/landing-pages/{page_id}", body=body, method="PATCH", account=account)
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
     return json.dumps({
@@ -3092,7 +3303,7 @@ def update_landing_page(page_id: str, name: Optional[str] = None, title: Optiona
 
 
 @mcp.tool()
-def delete_landing_page(page_id: str) -> str:
+def delete_landing_page(page_id: str, account: str | None = None) -> str:
     """Permanently delete a landing page. Cannot be undone.
 
     Side effect: the page becomes inaccessible at its public URL immediately. Past visit
@@ -3104,20 +3315,21 @@ def delete_landing_page(page_id: str) -> str:
 
     Args:
         page_id: Landing page ID to delete. Obtain from list_landing_pages.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ('deleted') and page_id on success.
     """
-    if (guard := _guard_write(action="delete landing page", page_id=page_id)):
+    if (guard := _guard_write(action="delete landing page", page_id=page_id, account=account)):
         return guard
-    result = mc_request(f"/landing-pages/{page_id}", method="DELETE")
+    result = mc_request(f"/landing-pages/{page_id}", method="DELETE", account=account)
     if isinstance(result, dict) and "error" in result:
         return json.dumps(result, indent=2)
     return json.dumps({"status": "deleted", "page_id": page_id}, indent=2)
 
 
 @mcp.tool()
-def publish_landing_page(page_id: str) -> str:
+def publish_landing_page(page_id: str, account: str | None = None) -> str:
     """Publish a landing page, making it live at its public URL.
 
     Idempotent on already-published pages. Use unpublish_landing_page to take a page offline.
@@ -3128,20 +3340,21 @@ def publish_landing_page(page_id: str) -> str:
 
     Args:
         page_id: Landing page ID to publish. Obtain from list_landing_pages.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ('published') and page_id on success.
     """
-    if (guard := _guard_write(action="publish landing page", page_id=page_id)):
+    if (guard := _guard_write(action="publish landing page", page_id=page_id, account=account)):
         return guard
-    result = mc_request(f"/landing-pages/{page_id}/actions/publish", method="POST")
+    result = mc_request(f"/landing-pages/{page_id}/actions/publish", method="POST", account=account)
     if isinstance(result, dict) and "error" in result:
         return json.dumps(result, indent=2)
     return json.dumps({"status": "published", "page_id": page_id}, indent=2)
 
 
 @mcp.tool()
-def unpublish_landing_page(page_id: str) -> str:
+def unpublish_landing_page(page_id: str, account: str | None = None) -> str:
     """Take a published landing page offline. The public URL stops serving the page.
 
     Reversible — re-publish with publish_landing_page. Use delete_landing_page for permanent
@@ -3152,13 +3365,14 @@ def unpublish_landing_page(page_id: str) -> str:
 
     Args:
         page_id: Landing page ID to unpublish. Obtain from list_landing_pages.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ('unpublished') and page_id on success.
     """
-    if (guard := _guard_write(action="unpublish landing page", page_id=page_id)):
+    if (guard := _guard_write(action="unpublish landing page", page_id=page_id, account=account)):
         return guard
-    result = mc_request(f"/landing-pages/{page_id}/actions/unpublish", method="POST")
+    result = mc_request(f"/landing-pages/{page_id}/actions/unpublish", method="POST", account=account)
     if isinstance(result, dict) and "error" in result:
         return json.dumps(result, indent=2)
     return json.dumps({"status": "unpublished", "page_id": page_id}, indent=2)
@@ -3167,7 +3381,7 @@ def unpublish_landing_page(page_id: str) -> str:
 # --- Read Tools: E-commerce ---
 
 @mcp.tool()
-def list_ecommerce_stores() -> str:
+def list_ecommerce_stores(account: str | None = None) -> str:
     """List connected e-commerce stores (Shopify, WooCommerce, etc.) with platform and currency info.
 
     Use to discover store IDs for list_store_orders, list_store_products, list_store_customers.
@@ -3176,11 +3390,14 @@ def list_ecommerce_stores() -> str:
 
     Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
+    Args:
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
     Returns:
         JSON with total_items and stores array. Each: id (use as store_id), list_id, name,
         platform, domain, currency_code (ISO 4217), money_format, created_at.
     """
-    data = mc_request("/ecommerce/stores")
+    data = mc_request("/ecommerce/stores", account=account)
     stores = []
     for s in data.get("stores", []):
         stores.append({
@@ -3197,7 +3414,7 @@ def list_ecommerce_stores() -> str:
 
 
 @mcp.tool()
-def list_store_orders(store_id: str, count: int = 20, offset: int = 0) -> str:
+def list_store_orders(store_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """List orders from a connected e-commerce store with totals and fulfillment status.
 
     Requires an active integration. Use list_store_customers for customer-level aggregates instead.
@@ -3208,13 +3425,14 @@ def list_store_orders(store_id: str, count: int = 20, offset: int = 0) -> str:
         store_id: E-commerce store ID (alphanumeric string). Obtain from list_ecommerce_stores.
         count: Orders to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and orders array. Each: id, customer (email), order_total (float),
         currency_code (ISO 4217), financial_status, fulfillment_status, processed_at_foreign,
         lines_count.
     """
-    data = mc_request(f"/ecommerce/stores/{store_id}/orders", params={"count": count, "offset": offset})
+    data = mc_request(f"/ecommerce/stores/{store_id}/orders", params={"count": count, "offset": offset}, account=account)
     orders = []
     for o in data.get("orders", []):
         orders.append({
@@ -3231,7 +3449,7 @@ def list_store_orders(store_id: str, count: int = 20, offset: int = 0) -> str:
 
 
 @mcp.tool()
-def list_store_products(store_id: str, count: int = 20, offset: int = 0) -> str:
+def list_store_products(store_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """List products from a connected e-commerce store with titles, URLs, and variant counts.
 
     Use to browse the product catalog synced to Mailchimp. Useful for verifying sync status or
@@ -3244,6 +3462,7 @@ def list_store_products(store_id: str, count: int = 20, offset: int = 0) -> str:
         store_id: The e-commerce store ID. Obtain from list_ecommerce_stores.
         count: Number of products to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and products array. Each product: id (string), title, url (product
@@ -3253,7 +3472,7 @@ def list_store_products(store_id: str, count: int = 20, offset: int = 0) -> str:
     Example:
         list_store_products(store_id="store123", count=50) -> {"total_items": 200, "products": [{"id": "prod_123", "title": "Blue T-Shirt", "variants_count": 3, ...}]}
     """
-    data = mc_request(f"/ecommerce/stores/{store_id}/products", params={"count": count, "offset": offset})
+    data = mc_request(f"/ecommerce/stores/{store_id}/products", params={"count": count, "offset": offset}, account=account)
     products = []
     for p in data.get("products", []):
         products.append({
@@ -3268,7 +3487,7 @@ def list_store_products(store_id: str, count: int = 20, offset: int = 0) -> str:
 
 
 @mcp.tool()
-def list_store_customers(store_id: str, count: int = 20, offset: int = 0) -> str:
+def list_store_customers(store_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """List customers from a connected e-commerce store with order counts, total spend, and opt-in status.
 
     Use to analyze customer purchasing behavior or identify high-value customers. Requires an
@@ -3281,6 +3500,7 @@ def list_store_customers(store_id: str, count: int = 20, offset: int = 0) -> str
         store_id: The e-commerce store ID. Obtain from list_ecommerce_stores.
         count: Number of customers to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and customers array. Each customer: id (string), email_address,
@@ -3290,7 +3510,7 @@ def list_store_customers(store_id: str, count: int = 20, offset: int = 0) -> str
     Example:
         list_store_customers(store_id="store123", count=50) -> {"total_items": 500, "customers": [{"email_address": "jane@co.com", "orders_count": 5, "total_spent": 299.95, ...}]}
     """
-    data = mc_request(f"/ecommerce/stores/{store_id}/customers", params={"count": count, "offset": offset})
+    data = mc_request(f"/ecommerce/stores/{store_id}/customers", params={"count": count, "offset": offset}, account=account)
     customers = []
     for c in data.get("customers", []):
         customers.append({
@@ -3309,7 +3529,7 @@ def list_store_customers(store_id: str, count: int = 20, offset: int = 0) -> str
 # --- Read/Write Tools: E-commerce Carts ---
 
 @mcp.tool()
-def list_store_carts(store_id: str, count: int = 20, offset: int = 0) -> str:
+def list_store_carts(store_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """List carts for a store, including abandoned ones, with customer and total info.
 
     Carts in Mailchimp typically represent in-progress purchases synced from a connected
@@ -3324,6 +3544,7 @@ def list_store_carts(store_id: str, count: int = 20, offset: int = 0) -> str:
         store_id: E-commerce store ID. Obtain from list_ecommerce_stores.
         count: Number of carts to return (1-1000, default 20).
         offset: Pagination offset.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with store_id, total_items, and carts array. Each cart: id, customer (object
@@ -3333,6 +3554,7 @@ def list_store_carts(store_id: str, count: int = 20, offset: int = 0) -> str:
     data = mc_request(
         f"/ecommerce/stores/{store_id}/carts",
         params={"count": count, "offset": offset},
+        account=account,
     )
     carts = []
     for c in data.get("carts", []):
@@ -3354,7 +3576,7 @@ def list_store_carts(store_id: str, count: int = 20, offset: int = 0) -> str:
 
 
 @mcp.tool()
-def get_store_cart(store_id: str, cart_id: str) -> str:
+def get_store_cart(store_id: str, cart_id: str, account: str | None = None) -> str:
     """Retrieve a single cart with its full line items, customer, and total breakdown.
 
     Use to inspect what's in an abandoned cart before triggering a recovery email.
@@ -3366,13 +3588,14 @@ def get_store_cart(store_id: str, cart_id: str) -> str:
     Args:
         store_id: E-commerce store ID. Obtain from list_ecommerce_stores.
         cart_id: Cart ID. Obtain from list_store_carts.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, customer, currency_code, order_total, tax_total, checkout_url,
         lines (array of {id, product_id, product_variant_id, quantity, price}),
         created_at, updated_at.
     """
-    data = mc_request(f"/ecommerce/stores/{store_id}/carts/{cart_id}")
+    data = mc_request(f"/ecommerce/stores/{store_id}/carts/{cart_id}", account=account)
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
     return json.dumps({
@@ -3389,7 +3612,7 @@ def get_store_cart(store_id: str, cart_id: str) -> str:
 
 
 @mcp.tool()
-def create_store_cart(store_id: str, cart_id: str, customer_id: str, currency_code: str, order_total: float, lines_json: str, checkout_url: Optional[str] = None, tax_total: Optional[float] = None) -> str:
+def create_store_cart(store_id: str, cart_id: str, customer_id: str, currency_code: str, order_total: float, lines_json: str, checkout_url: Optional[str] = None, tax_total: Optional[float] = None, account: str | None = None) -> str:
     """Create a cart in a store with line items and a customer reference. Used to push
     abandoned-cart data from an external system into Mailchimp for recovery workflows.
 
@@ -3410,11 +3633,12 @@ def create_store_cart(store_id: str, cart_id: str, customer_id: str, currency_co
                "quantity": 2, "price": 19.99}]'
         checkout_url: Optional URL to resume the cart (used in recovery emails).
         tax_total: Optional tax portion of order_total.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, customer, currency_code, order_total, checkout_url, created_at.
     """
-    if (guard := _guard_write(action="create cart", store_id=store_id, cart_id=cart_id)):
+    if (guard := _guard_write(action="create cart", store_id=store_id, cart_id=cart_id, account=account)):
         return guard
     try:
         lines = json.loads(lines_json)
@@ -3431,7 +3655,7 @@ def create_store_cart(store_id: str, cart_id: str, customer_id: str, currency_co
         body["checkout_url"] = checkout_url
     if tax_total is not None:
         body["tax_total"] = tax_total
-    data = mc_request(f"/ecommerce/stores/{store_id}/carts", body=body, method="POST")
+    data = mc_request(f"/ecommerce/stores/{store_id}/carts", body=body, method="POST", account=account)
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
     return json.dumps({
@@ -3445,7 +3669,7 @@ def create_store_cart(store_id: str, cart_id: str, customer_id: str, currency_co
 
 
 @mcp.tool()
-def update_store_cart(store_id: str, cart_id: str, order_total: Optional[float] = None, tax_total: Optional[float] = None, checkout_url: Optional[str] = None, currency_code: Optional[str] = None, lines_json: Optional[str] = None) -> str:
+def update_store_cart(store_id: str, cart_id: str, order_total: Optional[float] = None, tax_total: Optional[float] = None, checkout_url: Optional[str] = None, currency_code: Optional[str] = None, lines_json: Optional[str] = None, account: str | None = None) -> str:
     """Update an existing cart's totals, currency, checkout URL, or line items.
 
     Only provided fields are changed. To replace line items, pass a full lines_json array
@@ -3463,11 +3687,12 @@ def update_store_cart(store_id: str, cart_id: str, order_total: Optional[float] 
         checkout_url: New checkout URL.
         currency_code: New ISO 4217 currency code.
         lines_json: JSON string with a replacement line items array.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, order_total, tax_total, checkout_url, currency_code, updated_at.
     """
-    if (guard := _guard_write(action="update cart", store_id=store_id, cart_id=cart_id)):
+    if (guard := _guard_write(action="update cart", store_id=store_id, cart_id=cart_id, account=account)):
         return guard
     body: dict = {}
     if order_total is not None:
@@ -3483,7 +3708,7 @@ def update_store_cart(store_id: str, cart_id: str, order_total: Optional[float] 
             body["lines"] = json.loads(lines_json)
         except json.JSONDecodeError as e:
             return json.dumps({"error": f"Invalid lines_json: {e}"}, indent=2)
-    data = mc_request(f"/ecommerce/stores/{store_id}/carts/{cart_id}", body=body, method="PATCH")
+    data = mc_request(f"/ecommerce/stores/{store_id}/carts/{cart_id}", body=body, method="PATCH", account=account)
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
     return json.dumps({
@@ -3497,7 +3722,7 @@ def update_store_cart(store_id: str, cart_id: str, order_total: Optional[float] 
 
 
 @mcp.tool()
-def delete_store_cart(store_id: str, cart_id: str) -> str:
+def delete_store_cart(store_id: str, cart_id: str, account: str | None = None) -> str:
     """Permanently delete a cart from a store. Cannot be undone.
 
     Use when an external system reports the cart has been completed (converted to order)
@@ -3509,13 +3734,14 @@ def delete_store_cart(store_id: str, cart_id: str) -> str:
     Args:
         store_id: E-commerce store ID.
         cart_id: Cart ID to delete.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ('deleted'), store_id, cart_id on success.
     """
-    if (guard := _guard_write(action="delete cart", store_id=store_id, cart_id=cart_id)):
+    if (guard := _guard_write(action="delete cart", store_id=store_id, cart_id=cart_id, account=account)):
         return guard
-    result = mc_request(f"/ecommerce/stores/{store_id}/carts/{cart_id}", method="DELETE")
+    result = mc_request(f"/ecommerce/stores/{store_id}/carts/{cart_id}", method="DELETE", account=account)
     if isinstance(result, dict) and "error" in result:
         return json.dumps(result, indent=2)
     return json.dumps({"status": "deleted", "store_id": store_id, "cart_id": cart_id}, indent=2)
@@ -3524,7 +3750,7 @@ def delete_store_cart(store_id: str, cart_id: str) -> str:
 # --- Read/Write Tools: E-commerce Promo Rules ---
 
 @mcp.tool()
-def list_promo_rules(store_id: str, count: int = 20, offset: int = 0) -> str:
+def list_promo_rules(store_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """List discount/promo rules configured for a store (fixed amount, percentage, free shipping).
 
     A promo rule defines the discount mechanic (e.g. '20% off entire order'). Codes that
@@ -3536,6 +3762,7 @@ def list_promo_rules(store_id: str, count: int = 20, offset: int = 0) -> str:
         store_id: E-commerce store ID. Obtain from list_ecommerce_stores.
         count: Number of rules to return (1-1000, default 20).
         offset: Pagination offset.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with store_id, total_items, and promo_rules array. Each rule: id, title,
@@ -3545,6 +3772,7 @@ def list_promo_rules(store_id: str, count: int = 20, offset: int = 0) -> str:
     data = mc_request(
         f"/ecommerce/stores/{store_id}/promo-rules",
         params={"count": count, "offset": offset},
+        account=account,
     )
     rules = []
     for r in data.get("promo_rules", []):
@@ -3567,7 +3795,7 @@ def list_promo_rules(store_id: str, count: int = 20, offset: int = 0) -> str:
 
 
 @mcp.tool()
-def get_promo_rule(store_id: str, promo_rule_id: str) -> str:
+def get_promo_rule(store_id: str, promo_rule_id: str, account: str | None = None) -> str:
     """Retrieve a single promo rule by ID with its full configuration.
 
     Use to inspect a rule's current settings before updating, or to confirm a rule exists
@@ -3579,12 +3807,13 @@ def get_promo_rule(store_id: str, promo_rule_id: str) -> str:
     Args:
         store_id: E-commerce store ID.
         promo_rule_id: Rule ID to inspect.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, title, description, amount, type, target, enabled, starts_at,
         ends_at, created_at, updated_at.
     """
-    data = mc_request(f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}")
+    data = mc_request(f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}", account=account)
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
     return json.dumps({
@@ -3603,7 +3832,7 @@ def get_promo_rule(store_id: str, promo_rule_id: str) -> str:
 
 
 @mcp.tool()
-def create_promo_rule(store_id: str, promo_rule_id: str, description: str, amount: float, type: str, target: str, enabled: bool = True, title: Optional[str] = None, starts_at: Optional[str] = None, ends_at: Optional[str] = None) -> str:
+def create_promo_rule(store_id: str, promo_rule_id: str, description: str, amount: float, type: str, target: str, enabled: bool = True, title: Optional[str] = None, starts_at: Optional[str] = None, ends_at: Optional[str] = None, account: str | None = None) -> str:
     """Create a promo rule (discount mechanic) in a store. Attach codes to it afterwards
     via create_promo_code.
 
@@ -3624,11 +3853,12 @@ def create_promo_rule(store_id: str, promo_rule_id: str, description: str, amoun
         title: Optional public title.
         starts_at: Optional ISO 8601 start datetime (rule inactive before this).
         ends_at: Optional ISO 8601 end datetime (rule inactive after this).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, title, description, amount, type, target, enabled, created_at.
     """
-    if (guard := _guard_write(action="create promo rule", store_id=store_id, promo_rule_id=promo_rule_id)):
+    if (guard := _guard_write(action="create promo rule", store_id=store_id, promo_rule_id=promo_rule_id, account=account)):
         return guard
     body: dict = {
         "id": promo_rule_id,
@@ -3644,7 +3874,7 @@ def create_promo_rule(store_id: str, promo_rule_id: str, description: str, amoun
         body["starts_at"] = starts_at
     if ends_at:
         body["ends_at"] = ends_at
-    data = mc_request(f"/ecommerce/stores/{store_id}/promo-rules", body=body, method="POST")
+    data = mc_request(f"/ecommerce/stores/{store_id}/promo-rules", body=body, method="POST", account=account)
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
     return json.dumps({
@@ -3660,7 +3890,7 @@ def create_promo_rule(store_id: str, promo_rule_id: str, description: str, amoun
 
 
 @mcp.tool()
-def update_promo_rule(store_id: str, promo_rule_id: str, description: Optional[str] = None, amount: Optional[float] = None, type: Optional[str] = None, target: Optional[str] = None, enabled: Optional[bool] = None, title: Optional[str] = None, starts_at: Optional[str] = None, ends_at: Optional[str] = None) -> str:
+def update_promo_rule(store_id: str, promo_rule_id: str, description: Optional[str] = None, amount: Optional[float] = None, type: Optional[str] = None, target: Optional[str] = None, enabled: Optional[bool] = None, title: Optional[str] = None, starts_at: Optional[str] = None, ends_at: Optional[str] = None, account: str | None = None) -> str:
     """Update an existing promo rule. Only provided fields are changed.
 
     Useful to toggle a rule on/off (enabled), extend an end date, or adjust the discount
@@ -3680,11 +3910,12 @@ def update_promo_rule(store_id: str, promo_rule_id: str, description: Optional[s
         title: New public title.
         starts_at: New start datetime (ISO 8601).
         ends_at: New end datetime (ISO 8601).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, title, description, amount, type, target, enabled, updated_at.
     """
-    if (guard := _guard_write(action="update promo rule", store_id=store_id, promo_rule_id=promo_rule_id)):
+    if (guard := _guard_write(action="update promo rule", store_id=store_id, promo_rule_id=promo_rule_id, account=account)):
         return guard
     body: dict = {}
     for key, value in [
@@ -3703,6 +3934,7 @@ def update_promo_rule(store_id: str, promo_rule_id: str, description: Optional[s
         f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}",
         body=body,
         method="PATCH",
+        account=account,
     )
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
@@ -3719,7 +3951,7 @@ def update_promo_rule(store_id: str, promo_rule_id: str, description: Optional[s
 
 
 @mcp.tool()
-def delete_promo_rule(store_id: str, promo_rule_id: str) -> str:
+def delete_promo_rule(store_id: str, promo_rule_id: str, account: str | None = None) -> str:
     """Permanently delete a promo rule and all its associated promo codes. Irreversible.
 
     Side effect: every promo code attached to this rule is also deleted and stops working
@@ -3732,15 +3964,17 @@ def delete_promo_rule(store_id: str, promo_rule_id: str) -> str:
     Args:
         store_id: E-commerce store ID.
         promo_rule_id: Rule ID to delete.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ('deleted'), store_id, promo_rule_id on success.
     """
-    if (guard := _guard_write(action="delete promo rule", store_id=store_id, promo_rule_id=promo_rule_id)):
+    if (guard := _guard_write(action="delete promo rule", store_id=store_id, promo_rule_id=promo_rule_id, account=account)):
         return guard
     result = mc_request(
         f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}",
         method="DELETE",
+        account=account,
     )
     if isinstance(result, dict) and "error" in result:
         return json.dumps(result, indent=2)
@@ -3754,7 +3988,7 @@ def delete_promo_rule(store_id: str, promo_rule_id: str) -> str:
 # --- Read/Write Tools: E-commerce Promo Codes ---
 
 @mcp.tool()
-def list_promo_codes(store_id: str, promo_rule_id: str, count: int = 20, offset: int = 0) -> str:
+def list_promo_codes(store_id: str, promo_rule_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """List the redeemable codes attached to a promo rule (e.g. 'SUMMER20', 'VIPONLY').
 
     Codes are what customers type at checkout. They redeem the discount defined by the
@@ -3767,6 +4001,7 @@ def list_promo_codes(store_id: str, promo_rule_id: str, count: int = 20, offset:
         promo_rule_id: Rule ID. Obtain from list_promo_rules.
         count: Number of codes to return (1-1000, default 20).
         offset: Pagination offset.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with store_id, promo_rule_id, total_items, and promo_codes array. Each code:
@@ -3776,6 +4011,7 @@ def list_promo_codes(store_id: str, promo_rule_id: str, count: int = 20, offset:
     data = mc_request(
         f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}/promo-codes",
         params={"count": count, "offset": offset},
+        account=account,
     )
     codes = []
     for c in data.get("promo_codes", []):
@@ -3797,7 +4033,7 @@ def list_promo_codes(store_id: str, promo_rule_id: str, count: int = 20, offset:
 
 
 @mcp.tool()
-def get_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str) -> str:
+def get_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str, account: str | None = None) -> str:
     """Retrieve a single promo code by ID with its current settings and usage stats.
 
     Use to check a code's usage_count before a campaign, or confirm a code is enabled.
@@ -3810,12 +4046,14 @@ def get_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str) -> str
         store_id: E-commerce store ID.
         promo_rule_id: Rule ID the code is attached to.
         promo_code_id: Code ID to inspect.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, code, redemption_url, usage_count, enabled, created_at, updated_at.
     """
     data = mc_request(
-        f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}/promo-codes/{promo_code_id}"
+        f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}/promo-codes/{promo_code_id}",
+        account=account,
     )
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
@@ -3831,7 +4069,7 @@ def get_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str) -> str
 
 
 @mcp.tool()
-def create_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str, code: str, redemption_url: str, enabled: bool = True) -> str:
+def create_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str, code: str, redemption_url: str, enabled: bool = True, account: str | None = None) -> str:
     """Create a redeemable code under an existing promo rule.
 
     Customers type the `code` string at checkout to apply the rule's discount. Code matching
@@ -3848,11 +4086,12 @@ def create_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str, cod
         code: The actual code string customers type at checkout (e.g. 'SUMMER20').
         redemption_url: URL where the code can be applied (your checkout page).
         enabled: Whether the code is active. Default true.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, code, redemption_url, usage_count (0 at creation), enabled, created_at.
     """
-    if (guard := _guard_write(action="create promo code", store_id=store_id, promo_rule_id=promo_rule_id, code=code)):
+    if (guard := _guard_write(action="create promo code", store_id=store_id, promo_rule_id=promo_rule_id, code=code, account=account)):
         return guard
     body = {
         "id": promo_code_id,
@@ -3864,6 +4103,7 @@ def create_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str, cod
         f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}/promo-codes",
         body=body,
         method="POST",
+        account=account,
     )
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
@@ -3878,7 +4118,7 @@ def create_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str, cod
 
 
 @mcp.tool()
-def update_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str, code: Optional[str] = None, redemption_url: Optional[str] = None, enabled: Optional[bool] = None) -> str:
+def update_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str, code: Optional[str] = None, redemption_url: Optional[str] = None, enabled: Optional[bool] = None, account: str | None = None) -> str:
     """Update a promo code's string, redemption URL, or enabled state. Cannot move a code
     to a different rule — delete and re-create instead.
 
@@ -3895,11 +4135,12 @@ def update_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str, cod
         code: New code string (case-insensitive).
         redemption_url: New redemption URL.
         enabled: Toggle the code on/off.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id, code, redemption_url, enabled, updated_at.
     """
-    if (guard := _guard_write(action="update promo code", store_id=store_id, promo_rule_id=promo_rule_id, promo_code_id=promo_code_id)):
+    if (guard := _guard_write(action="update promo code", store_id=store_id, promo_rule_id=promo_rule_id, promo_code_id=promo_code_id, account=account)):
         return guard
     body: dict = {}
     if code is not None:
@@ -3912,6 +4153,7 @@ def update_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str, cod
         f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}/promo-codes/{promo_code_id}",
         body=body,
         method="PATCH",
+        account=account,
     )
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
@@ -3925,7 +4167,7 @@ def update_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str, cod
 
 
 @mcp.tool()
-def delete_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str) -> str:
+def delete_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str, account: str | None = None) -> str:
     """Permanently delete a promo code. Past redemption history is lost. Irreversible.
 
     Use update_promo_code with enabled=false to disable a code while preserving its
@@ -3938,15 +4180,17 @@ def delete_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str) -> 
         store_id: E-commerce store ID.
         promo_rule_id: Rule ID the code is attached to.
         promo_code_id: Code ID to delete.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ('deleted'), store_id, promo_rule_id, promo_code_id on success.
     """
-    if (guard := _guard_write(action="delete promo code", store_id=store_id, promo_rule_id=promo_rule_id, promo_code_id=promo_code_id)):
+    if (guard := _guard_write(action="delete promo code", store_id=store_id, promo_rule_id=promo_rule_id, promo_code_id=promo_code_id, account=account)):
         return guard
     result = mc_request(
         f"/ecommerce/stores/{store_id}/promo-rules/{promo_rule_id}/promo-codes/{promo_code_id}",
         method="DELETE",
+        account=account,
     )
     if isinstance(result, dict) and "error" in result:
         return json.dumps(result, indent=2)
@@ -3961,7 +4205,7 @@ def delete_promo_code(store_id: str, promo_rule_id: str, promo_code_id: str) -> 
 # --- Read Tools: Campaign Folders ---
 
 @mcp.tool()
-def list_campaign_folders(count: int = 50, offset: int = 0) -> str:
+def list_campaign_folders(count: int = 50, offset: int = 0, account: str | None = None) -> str:
     """List campaign folders used to organize campaigns in the Mailchimp dashboard.
 
     Folders are organizational containers only; they do not affect campaign delivery or behavior.
@@ -3973,11 +4217,12 @@ def list_campaign_folders(count: int = 50, offset: int = 0) -> str:
     Args:
         count: Number of folders to return (1-1000, default 50).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and folders array. Each folder: id, name, count (campaigns in folder).
     """
-    data = mc_request("/campaign-folders", params={"count": count, "offset": offset})
+    data = mc_request("/campaign-folders", params={"count": count, "offset": offset}, account=account)
     folders = []
     for f in data.get("folders", []):
         folders.append({
@@ -3991,7 +4236,7 @@ def list_campaign_folders(count: int = 50, offset: int = 0) -> str:
 # --- Batch Operations ---
 
 @mcp.tool()
-def create_batch(operations: str) -> str:
+def create_batch(operations: str, account: str | None = None) -> str:
     """Submit multiple API operations as a single asynchronous batch request.
 
     Use for bulk operations exceeding other tool limits (e.g. batch_subscribe max 500). Operations
@@ -4003,14 +4248,15 @@ def create_batch(operations: str) -> str:
     Args:
         operations: JSON array of operations. Each requires: method ('GET'/'POST'/'PATCH'/'PUT'/
             'DELETE'), path (API endpoint, e.g. '/lists/abc123/members'), optional body (JSON string).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id (batch ID for get_batch_status), status ('pending'), total_operations, submitted_at.
     """
-    if (guard := _guard_write(action="run batch operations")):
+    if (guard := _guard_write(action="run batch operations", account=account)):
         return guard
     ops = json.loads(operations)
-    data = mc_request("/batches", body={"operations": ops}, method="POST")
+    data = mc_request("/batches", body={"operations": ops}, method="POST", account=account)
     return json.dumps({
         "id": data.get("id"),
         "status": data.get("status"),
@@ -4020,7 +4266,7 @@ def create_batch(operations: str) -> str:
 
 
 @mcp.tool()
-def get_batch_status(batch_id: str) -> str:
+def get_batch_status(batch_id: str, account: str | None = None) -> str:
     """Check the progress and completion status of an asynchronous batch operation.
 
     Use after create_batch to poll for completion. Call repeatedly until status is 'finished'.
@@ -4030,6 +4276,7 @@ def get_batch_status(batch_id: str) -> str:
 
     Args:
         batch_id: The batch operation ID (e.g. 'batch123abc'). Obtain from create_batch.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with fields: id, status ('pending' = queued, 'started' = in progress,
@@ -4041,7 +4288,7 @@ def get_batch_status(batch_id: str) -> str:
     Example:
         get_batch_status(batch_id="batch123") -> {"status": "finished", "total_operations": 100, "finished_operations": 100, "errored_operations": 2, "response_body_url": "https://...", ...}
     """
-    data = mc_request(f"/batches/{batch_id}")
+    data = mc_request(f"/batches/{batch_id}", account=account)
     return json.dumps({
         "id": data.get("id"),
         "status": data.get("status"),
@@ -4055,7 +4302,7 @@ def get_batch_status(batch_id: str) -> str:
 
 
 @mcp.tool()
-def list_batches(count: int = 20, offset: int = 0) -> str:
+def list_batches(count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """List recent batch operations with status and progress.
 
     Use get_batch_status for detailed progress on a specific batch.
@@ -4065,12 +4312,13 @@ def list_batches(count: int = 20, offset: int = 0) -> str:
     Args:
         count: Batch operations to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and batches array. Each: id, status ('pending'/'started'/'finished'),
         total_operations, finished_operations, errored_operations, submitted_at, completed_at.
     """
-    data = mc_request("/batches", params={"count": count, "offset": offset})
+    data = mc_request("/batches", params={"count": count, "offset": offset}, account=account)
     batches = []
     for b in data.get("batches", []):
         batches.append({
@@ -4088,7 +4336,7 @@ def list_batches(count: int = 20, offset: int = 0) -> str:
 # --- Tools: Ping & Search ---
 
 @mcp.tool()
-def ping() -> str:
+def ping(account: str | None = None) -> str:
     """Check API connectivity and verify the API key is valid.
 
     Fastest health check available. Use get_account_info instead if you need account details.
@@ -4096,10 +4344,13 @@ def ping() -> str:
 
     Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
 
+    Args:
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
     Returns:
         JSON with health_check ('ok' if connected), status_code (200 if healthy).
     """
-    data = mc_request("/ping")
+    data = mc_request("/ping", account=account)
     return json.dumps({
         "health_check": data.get("health_check"),
         "status_code": 200 if "health_check" in data else data.get("status", 0),
@@ -4107,7 +4358,7 @@ def ping() -> str:
 
 
 @mcp.tool()
-def search_campaigns(query: str, count: int = 20, offset: int = 0) -> str:
+def search_campaigns(query: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
     """Search campaigns by keyword across titles, subject lines, and list names.
 
     Use to find campaigns when you do not know the ID. Use list_campaigns to browse by status
@@ -4120,12 +4371,13 @@ def search_campaigns(query: str, count: int = 20, offset: int = 0) -> str:
             lines, and list names.
         count: Number of results to return (1-1000, default 20).
         offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and results array. Each result: campaign object with id, type,
         status, title, subject_line, send_time, emails_sent.
     """
-    data = mc_request("/search-campaigns", params={"query": query, "count": count, "offset": offset})
+    data = mc_request("/search-campaigns", params={"query": query, "count": count, "offset": offset}, account=account)
     results = []
     for r in data.get("results", []):
         c = r.get("campaign", {})
@@ -4144,7 +4396,7 @@ def search_campaigns(query: str, count: int = 20, offset: int = 0) -> str:
 
 
 @mcp.tool()
-def search_automation_campaigns(count: int = 20, offset: int = 0, list_id: Optional[str] = None, status: Optional[str] = None, since_send_time: Optional[str] = None, before_send_time: Optional[str] = None) -> str:
+def search_automation_campaigns(count: int = 20, offset: int = 0, list_id: Optional[str] = None, status: Optional[str] = None, since_send_time: Optional[str] = None, before_send_time: Optional[str] = None, account: str | None = None) -> str:
     """List campaigns originated by an automation or a Customer Journey (campaign type='automation').
 
     Every email Mailchimp sends from a Classic automation or a Customer Journey creates a
@@ -4167,6 +4419,7 @@ def search_automation_campaigns(count: int = 20, offset: int = 0, list_id: Optio
         since_send_time: Only return campaigns sent after this ISO 8601 datetime (e.g.
             '2026-04-01T00:00:00Z').
         before_send_time: Only return campaigns sent before this ISO 8601 datetime.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with total_items and campaigns array. Each campaign: id, status, title, subject_line,
@@ -4182,7 +4435,7 @@ def search_automation_campaigns(count: int = 20, offset: int = 0, list_id: Optio
         params["since_send_time"] = since_send_time
     if before_send_time:
         params["before_send_time"] = before_send_time
-    data = mc_request("/campaigns", params=params)
+    data = mc_request("/campaigns", params=params, account=account)
     campaigns = []
     for c in data.get("campaigns", []):
         campaigns.append({
@@ -4199,7 +4452,7 @@ def search_automation_campaigns(count: int = 20, offset: int = 0, list_id: Optio
 
 
 @mcp.tool()
-def resend_to_non_openers(campaign_id: str) -> str:
+def resend_to_non_openers(campaign_id: str, account: str | None = None) -> str:
     """Create a new draft campaign targeting only recipients who did not open the original.
 
     The new campaign inherits content and settings from the original. Not idempotent: calling
@@ -4213,13 +4466,14 @@ def resend_to_non_openers(campaign_id: str) -> str:
     Args:
         campaign_id: ID of the original sent campaign (e.g. 'abc123def4'). Obtain from
             list_campaigns(status='sent').
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with id (new campaign ID), status ('save'), title, web_id.
     """
-    if (guard := _guard_write(action="resend to non-openers", campaign_id=campaign_id)):
+    if (guard := _guard_write(action="resend to non-openers", campaign_id=campaign_id, account=account)):
         return guard
-    data = mc_request(f"/campaigns/{campaign_id}/actions/create-resend", method="POST")
+    data = mc_request(f"/campaigns/{campaign_id}/actions/create-resend", method="POST", account=account)
     return json.dumps({
         "id": data.get("id"),
         "status": data.get("status"),
@@ -4229,7 +4483,7 @@ def resend_to_non_openers(campaign_id: str) -> str:
 
 
 @mcp.tool()
-def trigger_customer_journey(journey_id: str, step_id: str, email_address: str) -> str:
+def trigger_customer_journey(journey_id: str, step_id: str, email_address: str, account: str | None = None) -> str:
     """Trigger a contact into a specific step of a Customer Journey workflow.
 
     Side effect: the contact begins receiving journey emails immediately. The contact must be
@@ -4244,16 +4498,18 @@ def trigger_customer_journey(journey_id: str, step_id: str, email_address: str) 
         journey_id: Customer Journey ID. Found in the Mailchimp web UI or via list_automations.
         step_id: Step ID to trigger into. Must be an API-trigger entry point.
         email_address: Email of the contact. Must be subscribed in the journey's audience.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
         JSON with status ('triggered'), journey_id, step_id, email_address.
     """
-    if (guard := _guard_write(action="trigger customer journey", journey_id=journey_id, step_id=step_id, email_address=email_address)):
+    if (guard := _guard_write(action="trigger customer journey", journey_id=journey_id, step_id=step_id, email_address=email_address, account=account)):
         return guard
     mc_request(
         f"/customer-journeys/journeys/{journey_id}/steps/{step_id}/actions/trigger",
         body={"email_address": email_address},
         method="POST",
+        account=account,
     )
     return json.dumps({"status": "triggered", "journey_id": journey_id, "step_id": step_id, "email_address": email_address}, indent=2)
 
