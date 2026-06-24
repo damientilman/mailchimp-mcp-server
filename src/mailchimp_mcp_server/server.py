@@ -234,6 +234,57 @@ def get_campaign_details(campaign_id: str) -> str:
 
 
 @mcp.tool()
+def get_campaign_content(campaign_id: str, include_html: bool = False) -> str:
+    """Read the rendered body copy of a campaign (plain text, optionally HTML).
+
+    Use to retrieve the email copy that was actually sent, for content audits, analysis, or
+    repurposing. Use get_campaign_details for settings/metadata (subject line, sender) and
+    get_campaign_report for post-send performance. Use list_campaigns or search_campaigns to
+    find campaign IDs.
+
+    Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). Read-only, safe to retry.
+
+    Args:
+        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Obtain from list_campaigns
+            or search_campaigns. This is the API id, not the numeric web_id from the dashboard URL.
+        include_html: When True, also return the raw HTML body. Defaults to False so responses
+            stay compact; plain_text is enough for most content work.
+
+    Returns:
+        JSON with campaign_id and plain_text (the plain-text body); html is added only when
+        include_html=True. For A/B (variate) campaigns, a variations array is included with one
+        entry per content variation: {label, plain_text, and html when include_html=True}.
+        Returns error if the campaign_id is invalid or the campaign has no content.
+
+    Example:
+        get_campaign_content(campaign_id="abc123def4") -> {"campaign_id": "abc123def4", "plain_text": "Hi *|FNAME|* ..."}
+    """
+    data = mc_request(f"/campaigns/{campaign_id}/content")
+    if "error" in data:
+        return json.dumps(data, indent=2)
+
+    result = {
+        "campaign_id": campaign_id,
+        "plain_text": data.get("plain_text", ""),
+    }
+    if include_html:
+        result["html"] = data.get("html", "")
+
+    variations = data.get("variate_contents")
+    if variations:
+        result["variations"] = [
+            {
+                "label": variation.get("content_label", ""),
+                "plain_text": variation.get("plain_text", ""),
+                **({"html": variation.get("html", "")} if include_html else {}),
+            }
+            for variation in variations
+        ]
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
 def get_campaign_report(campaign_id: str) -> str:
     """Retrieve aggregate performance metrics for a sent campaign: opens, clicks, bounces, benchmarks.
 

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-24
+
+### Added
+- **`get_campaign_content`** — read tool returning a campaign's rendered body copy via
+  `GET /campaigns/{id}/content`. Fills the gap between `get_campaign_details` (settings)
+  and `set_campaign_content` (draft writes), which left no way to read the body of a sent
+  campaign. Returns `plain_text` by default, with `include_html` to opt into the raw HTML;
+  A/B (variate) campaigns return a per-variation breakdown. Registered as a read tool, so it
+  stays available under `MAILCHIMP_READ_ONLY=true`.
+
 ## [0.6.0] - 2026-05
 
 ### Added
