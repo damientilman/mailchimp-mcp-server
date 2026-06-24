@@ -97,6 +97,43 @@ class TestCampaigns:
         assert "since_send_time" not in calls[0]["params"]
 
 
+class TestCampaignContent:
+    def test_returns_plain_text_and_withholds_html_by_default(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"plain_text": "Welcome aboard, here is your guide.", "html": "<p>Welcome</p>"})
+        payload = _parse(server.get_campaign_content(campaign_id="cam_1"))
+        assert calls[0]["endpoint"] == "/campaigns/cam_1/content"
+        assert calls[0]["method"] == "GET"
+        assert payload["campaign_id"] == "cam_1"
+        assert payload["plain_text"].startswith("Welcome aboard")
+        assert "html" not in payload
+
+    def test_includes_html_when_opted_in(self, mock_mc_request) -> None:
+        mock_mc_request({"plain_text": "Body copy", "html": "<p>Body copy</p>"})
+        payload = _parse(server.get_campaign_content(campaign_id="cam_1", include_html=True))
+        assert payload["html"] == "<p>Body copy</p>"
+
+    def test_breaks_out_ab_variations(self, mock_mc_request) -> None:
+        mock_mc_request(
+            {
+                "plain_text": "",
+                "variate_contents": [
+                    {"content_label": "Variation A", "plain_text": "Copy for A"},
+                    {"content_label": "Variation B", "plain_text": "Copy for B"},
+                ],
+            }
+        )
+        payload = _parse(server.get_campaign_content(campaign_id="cam_variate"))
+        assert len(payload["variations"]) == 2
+        assert payload["variations"][0]["label"] == "Variation A"
+        assert payload["variations"][1]["plain_text"] == "Copy for B"
+
+    def test_propagates_api_error(self, mock_mc_request) -> None:
+        mock_mc_request({"error": "Resource Not Found", "status": 404})
+        payload = _parse(server.get_campaign_content(campaign_id="missing"))
+        assert payload["error"] == "Resource Not Found"
+        assert "plain_text" not in payload
+
+
 class TestReports:
     def test_get_campaign_report_extracts_metrics(self, mock_mc_request) -> None:
         mock_mc_request(
