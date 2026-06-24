@@ -96,6 +96,40 @@ class TestCampaigns:
         assert "status" not in calls[0]["params"]
         assert "since_send_time" not in calls[0]["params"]
 
+    def test_get_campaign_content_plain_text_only_by_default(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"plain_text": "Hi friend, here's my cooling trick...", "html": "<p>Hi</p>"})
+        payload = _parse(server.get_campaign_content(campaign_id="abc123"))
+        assert calls[0]["endpoint"] == "/campaigns/abc123/content"
+        assert calls[0]["method"] == "GET"
+        assert payload["campaign_id"] == "abc123"
+        assert payload["plain_text"].startswith("Hi friend")
+        assert "html" not in payload  # HTML withheld unless requested
+
+    def test_get_campaign_content_includes_html_when_requested(self, mock_mc_request) -> None:
+        mock_mc_request({"plain_text": "Body", "html": "<p>Body</p>"})
+        payload = _parse(server.get_campaign_content(campaign_id="abc123", include_html=True))
+        assert payload["html"] == "<p>Body</p>"
+
+    def test_get_campaign_content_parses_ab_variations(self, mock_mc_request) -> None:
+        mock_mc_request(
+            {
+                "plain_text": "",
+                "variate_contents": [
+                    {"content_label": "Subject A", "plain_text": "Version A copy"},
+                    {"content_label": "Subject B", "plain_text": "Version B copy"},
+                ],
+            }
+        )
+        payload = _parse(server.get_campaign_content(campaign_id="ab_campaign"))
+        assert len(payload["variations"]) == 2
+        assert payload["variations"][0]["label"] == "Subject A"
+        assert payload["variations"][1]["plain_text"] == "Version B copy"
+
+    def test_get_campaign_content_propagates_errors(self, mock_mc_request) -> None:
+        mock_mc_request({"error": "Resource Not Found", "status": 404})
+        payload = _parse(server.get_campaign_content(campaign_id="missing"))
+        assert payload["error"] == "Resource Not Found"
+
 
 class TestReports:
     def test_get_campaign_report_extracts_metrics(self, mock_mc_request) -> None:
