@@ -110,3 +110,43 @@ class TestMcRequest:
         assert args[0] == "POST"
         assert args[1].endswith("/lists/abc/members")
         assert kwargs["json"] == {"email_address": "a@b.com"}
+
+
+class TestMcRequestAccounts:
+    def test_named_account_routes_to_its_dc_and_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            server,
+            "MAILCHIMP_ACCOUNTS",
+            {"foo": {"api_key": "fookey-us9", "dc": "us9", "base_url": "https://us9.api.mailchimp.com/3.0", "read_only": False, "dry_run": False}},
+        )
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.ok = True
+        mock_resp.json.return_value = {"ok": True}
+        with patch.object(requests, "request", return_value=mock_resp) as mock_req:
+            server.mc_request("/lists", account="foo")
+        called_url = mock_req.call_args.args[1]
+        assert called_url == "https://us9.api.mailchimp.com/3.0/lists"
+        assert mock_req.call_args.kwargs["auth"] == ("anystring", "fookey-us9")
+
+    def test_default_account_unaffected_by_registry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            server,
+            "MAILCHIMP_ACCOUNTS",
+            {"foo": {"api_key": "fookey-us9", "dc": "us9", "base_url": "https://us9.api.mailchimp.com/3.0", "read_only": False, "dry_run": False}},
+        )
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.ok = True
+        mock_resp.json.return_value = {"ok": True}
+        with patch.object(requests, "request", return_value=mock_resp) as mock_req:
+            server.mc_request("/lists")
+        assert mock_req.call_args.args[1] == "https://us1.api.mailchimp.com/3.0/lists"
+        assert mock_req.call_args.kwargs["auth"] == ("anystring", "test-key-us1")
+
+    def test_unknown_account_returns_error_without_network(self) -> None:
+        with patch.object(requests, "request") as mock_req:
+            result = server.mc_request("/lists", account="nope")
+        assert "error" in result
+        assert "nope" in result["error"]
+        mock_req.assert_not_called()

@@ -26,6 +26,7 @@ def _reset_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "MAILCHIMP_API_KEY", "test-key-us1")
     monkeypatch.setattr(server, "MAILCHIMP_DC", "us1")
     monkeypatch.setattr(server, "MAILCHIMP_BASE_URL", "https://us1.api.mailchimp.com/3.0")
+    monkeypatch.setattr(server, "MAILCHIMP_ACCOUNTS", {})
 
 
 @pytest.fixture
@@ -43,9 +44,16 @@ def mock_mc_request(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], list[dic
         index = {"i": 0}
 
         def fake_request(
-            endpoint: str, params: dict | None = None, body: dict | None = None, method: str = "GET"
+            endpoint: str,
+            params: dict | None = None,
+            body: dict | None = None,
+            method: str = "GET",
+            *,
+            account: str | None = None,
         ) -> dict:
-            calls.append({"endpoint": endpoint, "params": params, "body": body, "method": method})
+            calls.append(
+                {"endpoint": endpoint, "params": params, "body": body, "method": method, "account": account}
+            )
             response = responses[min(index["i"], len(responses) - 1)]
             index["i"] += 1
             return response

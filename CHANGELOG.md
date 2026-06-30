@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Multi-account support** (#37) — configure additional Mailchimp accounts with
+  `MAILCHIMP_API_KEY_<NAME>` environment variables (the plain `MAILCHIMP_API_KEY`
+  remains the implicit `default`). Every tool gains an optional `account` argument to
+  target a specific account per call; selection is stateless, with no active-account
+  switching, so a write always names its target. Each account derives its datacenter
+  from its own key and honors its own `MAILCHIMP_READ_ONLY_<NAME>` /
+  `MAILCHIMP_DRY_RUN_<NAME>` safety flags, so a write-protected and a writable account
+  can live in the same server. An unknown `account` returns an error listing the
+  configured accounts. Single-key setups are unaffected and behave exactly as before.
+- **`list_accounts`** — read-only tool returning the configured account names and their
+  read-only / dry-run state, for discovering valid `account` values. Never returns API keys.
+
+### Changed
+- Tool count bumped to **117** (was 115) — README and `glama.json` descriptions updated
+  accordingly. (The previous "115" headline trailed the actual count of 116; this corrects
+  it and adds `list_accounts`.)
+
 ## [0.7.0] - 2026-06-24
 
 ### Added

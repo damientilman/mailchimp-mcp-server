@@ -8,6 +8,10 @@ fields returned by Mailchimp is not asserted.
 from __future__ import annotations
 
 import json
+from unittest.mock import MagicMock, patch
+
+import pytest
+import requests
 
 from mailchimp_mcp_server import server
 
@@ -785,3 +789,47 @@ class TestAutomationCoverage:
         assert calls[1]["endpoint"] == "/campaigns"
         assert calls[1]["params"]["type"] == "automation"
         assert "since_send_time" in calls[1]["params"]
+
+
+class TestAccounts:
+    def test_list_accounts_lists_default_and_named_without_secrets(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(server, "MAILCHIMP_API_KEY", "supersecret-us1")
+        monkeypatch.setattr(server, "READ_ONLY", False)
+        monkeypatch.setattr(server, "DRY_RUN", False)
+        monkeypatch.setattr(
+            server,
+            "MAILCHIMP_ACCOUNTS",
+            {"tts": {"api_key": "ttssecret-us7", "dc": "us7", "base_url": "x", "read_only": True, "dry_run": False}},
+        )
+        result = server.list_accounts()
+        payload = _parse(result)
+
+        names = {a["name"]: a for a in payload["accounts"]}
+        assert names["default"]["is_default"] is True
+        assert names["default"]["read_only"] is False
+        assert names["tts"]["read_only"] is True
+        assert names["tts"]["is_default"] is False
+        # never leak key material
+        assert "supersecret" not in result
+        assert "ttssecret" not in result
+
+    def test_list_accounts_omits_default_when_no_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(server, "MAILCHIMP_API_KEY", "")
+        monkeypatch.setattr(server, "MAILCHIMP_ACCOUNTS", {"tts": {"read_only": False, "dry_run": False}})
+        payload = _parse(server.list_accounts())
+        assert [a["name"] for a in payload["accounts"]] == ["tts"]
+
+    def test_read_tool_routes_to_named_account_dc(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            server,
+            "MAILCHIMP_ACCOUNTS",
+            {"foo": {"api_key": "fookey-us9", "dc": "us9", "base_url": "https://us9.api.mailchimp.com/3.0", "read_only": False, "dry_run": False}},
+        )
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.ok = True
+        mock_resp.json.return_value = {"lists": [], "total_items": 0}
+        with patch.object(requests, "request", return_value=mock_resp) as mock_req:
+            server.list_audiences(account="foo")
+        assert mock_req.call_args.args[1].startswith("https://us9.api.mailchimp.com/3.0/")
+        assert mock_req.call_args.kwargs["auth"] == ("anystring", "fookey-us9")

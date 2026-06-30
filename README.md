@@ -7,7 +7,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io)
 
-The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **115 tools** to query and manage your Mailchimp account from any MCP-compatible client, with A/B campaign support, geographic reporting, full landing-page lifecycle, CRM-style member notes, e-commerce carts and promo codes, Classic Automation + Customer Journey reporting, and read-only / dry-run safety modes.
+The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **117 tools** to query and manage your Mailchimp account from any MCP-compatible client, with A/B campaign support, geographic reporting, full landing-page lifecycle, CRM-style member notes, e-commerce carts and promo codes, Classic Automation + Customer Journey reporting, and read-only / dry-run safety modes.
 
 Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api/) via [`requests`](https://pypi.org/project/requests/). Not based on the official [mailchimp-marketing-python](https://github.com/mailchimp/mailchimp-marketing-python) client. I hit too many issues with it so I went with raw HTTP calls instead.
 
@@ -94,14 +94,41 @@ pip install -e .
 | `MAILCHIMP_API_KEY` | Yes | Your Mailchimp API key (format: `<key>-<dc>`, e.g. `abc123-us8`) |
 | `MAILCHIMP_READ_ONLY` | No | Set to `true` to disable all write operations (default: `false`) |
 | `MAILCHIMP_DRY_RUN` | No | Set to `true` to preview write operations without executing them (default: `false`) |
+| `MAILCHIMP_API_KEY_<NAME>` | No | API key for an additional named account (e.g. `MAILCHIMP_API_KEY_MARKETING`). Target it with the `account` argument. See [Multi-account](#multi-account). |
+| `MAILCHIMP_READ_ONLY_<NAME>` | No | Read-only mode for a specific named account (default: `false`) |
+| `MAILCHIMP_DRY_RUN_<NAME>` | No | Dry-run mode for a specific named account (default: `false`) |
 
-The datacenter (`us8`, `us21`, etc.) is automatically extracted from the key.
+The datacenter (`us8`, `us21`, etc.) is automatically extracted from each key.
 
 ### Safety modes
 
 **Read-only mode** — When `MAILCHIMP_READ_ONLY=true`, all write tools (create, update, delete, schedule, etc.) are blocked and return an error. Read tools work normally. This is the recommended default for shared or exploratory setups where you only need reporting and analytics.
 
 **Dry-run mode** — When `MAILCHIMP_DRY_RUN=true`, write tools return a preview of the action they *would* perform (tool name, target resource, parameters) without making any API call. Useful for testing prompts before going live.
+
+### Multi-account
+
+By default the server uses the single `MAILCHIMP_API_KEY`, exposed as the `default` account. To manage several Mailchimp accounts from one server, add `MAILCHIMP_API_KEY_<NAME>` variables — the suffix becomes the lowercased account name (e.g. `MAILCHIMP_API_KEY_MARKETING` → `marketing`).
+
+Every tool then accepts an optional `account` argument, e.g. `list_audiences(account="marketing")`. Selection is per call and stateless — there is no "current account" to switch, so a write always names its target. Omitting `account` uses `default`. Call `list_accounts` to see the configured names and their safety-flag state, and each account can carry its own `MAILCHIMP_READ_ONLY_<NAME>` / `MAILCHIMP_DRY_RUN_<NAME>` flags (so a write-protected account and a writable one can live side by side). An unknown `account` returns an error listing the configured names.
+
+Single-key setups are unaffected: with only `MAILCHIMP_API_KEY` set, nothing changes.
+
+```json
+{
+  "mcpServers": {
+    "mailchimp": {
+      "command": "uvx",
+      "args": ["mailchimp-mcp"],
+      "env": {
+        "MAILCHIMP_API_KEY": "your-default-key-us8",
+        "MAILCHIMP_API_KEY_MARKETING": "another-key-us5",
+        "MAILCHIMP_READ_ONLY_MARKETING": "true"
+      }
+    }
+  }
+}
+```
 
 ### MCP client configuration
 
@@ -183,6 +210,7 @@ Replace `mcp-cli` with your client's binary name. For read-only mode, add
 | Tool | Description |
 |---|---|
 | `get_account_info` | Get account name, email, and subscriber count |
+| `list_accounts` | List configured accounts and their read-only / dry-run state (for multi-account setups) |
 
 ### Campaigns (read)
 
