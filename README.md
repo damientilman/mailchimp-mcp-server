@@ -7,7 +7,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io)
 
-The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **226 tools** to query and manage your Mailchimp account from any MCP-compatible client, with A/B campaign support, geographic reporting, full landing-page lifecycle, CRM-style member notes, e-commerce carts and promo codes, Classic Automation + Customer Journey reporting, and read-only / dry-run safety modes.
+The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **227 tools** to query and manage your Mailchimp account from any MCP-compatible client, with A/B campaign support, geographic reporting, full landing-page lifecycle, CRM-style member notes, e-commerce carts and promo codes, Classic Automation + Customer Journey reporting, and read-only / dry-run safety modes.
 
 Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api/) via [`requests`](https://pypi.org/project/requests/). Not based on the official [mailchimp-marketing-python](https://github.com/mailchimp/mailchimp-marketing-python) client. I hit too many issues with it so I went with raw HTTP calls instead.
 
@@ -56,6 +56,11 @@ Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api
 - **E-commerce** - Cart lifecycle, promo rules, and promo codes for discount workflows
 - **Batch** - Run bulk API operations in a single request
 
+**Runtime security**
+- **Risk metadata** - Per-tool read / write / destructive classification via MCP annotations and `describe_tools`
+- **Audit log** - Optional structured JSON audit events per dispatch (`MAILCHIMP_AUDIT_LOG`)
+- **Argument validation** - Pagination caps and required-ID checks before every request
+
 ## Prerequisites
 
 - Python 3.10+
@@ -103,6 +108,7 @@ pip install -e .
 | `MAILCHIMP_API_KEY_<NAME>` | No | API key for an additional named account (e.g. `MAILCHIMP_API_KEY_MARKETING`). Target it with the `account` argument. See [Multi-account](#multi-account). |
 | `MAILCHIMP_READ_ONLY_<NAME>` | No | Read-only mode for a specific named account (default: `false`) |
 | `MAILCHIMP_DRY_RUN_<NAME>` | No | Dry-run mode for a specific named account (default: `false`) |
+| `MAILCHIMP_AUDIT_LOG` | No | Set to `true` to emit a structured JSON audit event per tool dispatch to stderr (default: `false`). See [Runtime security](#runtime-security). |
 
 The datacenter (`us8`, `us21`, etc.) is automatically extracted from each key.
 
@@ -110,7 +116,20 @@ The datacenter (`us8`, `us21`, etc.) is automatically extracted from each key.
 
 **Read-only mode** — When `MAILCHIMP_READ_ONLY=true`, all write tools (create, update, delete, schedule, etc.) are blocked and return an error. Read tools work normally. This is the recommended default for shared or exploratory setups where you only need reporting and analytics.
 
-**Dry-run mode** — When `MAILCHIMP_DRY_RUN=true`, write tools return a preview of the action they *would* perform (tool name, target resource, parameters) without making any API call. Useful for testing prompts before going live.
+**Dry-run mode** — When `MAILCHIMP_DRY_RUN=true`, write tools return a preview of the action they *would* perform (tool name, target resource, parameters, and its risk tier) without making any API call. Useful for testing prompts before going live.
+
+### Runtime security
+
+The server is designed for defense-in-depth alongside an external MCP gateway: it owns the *semantics* (which tools are reads, reversible writes, or irreversible) and exposes them as machine-readable signals a gateway can enforce on, rather than making the gateway guess which calls are dangerous.
+
+**Risk metadata** — Every tool is classified as `read`, `write`, or `destructive` (irreversible data loss or an irreversible send). This surfaces two ways:
+
+- **MCP tool annotations** — `readOnlyHint`, `destructiveHint`, and `idempotentHint` travel through the standard `tools/list`, so any compliant client or gateway reads them directly.
+- **`describe_tools`** — a read tool returning `{name, risk, read_only, destructive, idempotent}` for every tool plus per-tier counts, for gateways that prefer a tool call.
+
+**Structured audit log** — With `MAILCHIMP_AUDIT_LOG=true`, each dispatch emits one JSON event to stderr with the tool, its risk tier, the `destructive` flag, the target account, the outcome (`executed` / `blocked_read_only` / `dry_run`), and the inspected arguments. Bulky or sensitive values (e.g. base64 `file_data`) are redacted and response bodies are never logged, so the stream is a safe audit sink to tail centrally.
+
+**Argument-contract validation** — All writes funnel through a single `_guard_write` chokepoint, and every request is validated before dispatch (pagination `count` capped to 1–1000, missing path IDs rejected), so malformed calls fail fast and consistently instead of hitting the API.
 
 ### Multi-account
 
@@ -217,6 +236,7 @@ Replace `mcp-cli` with your client's binary name. For read-only mode, add
 |---|---|
 | `get_account_info` | Get account name, email, and subscriber count |
 | `list_accounts` | List configured accounts and their read-only / dry-run state (for multi-account setups) |
+| `describe_tools` | List every tool with its risk tier (read / write / destructive) for policy enforcement |
 
 ### Campaigns (read)
 

@@ -11,8 +11,8 @@ import inspect
 
 from mailchimp_mcp_server import server
 
-# list_accounts intentionally takes no `account` (it lists them).
-_EXEMPT = {"list_accounts"}
+# list_accounts and describe_tools are account-agnostic metadata tools with no network call.
+_EXEMPT = {"list_accounts", "describe_tools"}
 
 _TREE = ast.parse(inspect.getsource(server))
 _TOOLS = [

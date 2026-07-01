@@ -1,10 +1,13 @@
 import hashlib
 import json
 import os
+import sys
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 # --- Config ---
 # The plain MAILCHIMP_API_KEY is the implicit "default" account. It is served from
@@ -15,8 +18,21 @@ MAILCHIMP_DC = MAILCHIMP_API_KEY.split("-")[-1] if "-" in MAILCHIMP_API_KEY else
 MAILCHIMP_BASE_URL = f"https://{MAILCHIMP_DC}.api.mailchimp.com/3.0"
 READ_ONLY = os.environ.get("MAILCHIMP_READ_ONLY", "").lower() in ("1", "true", "yes")
 DRY_RUN = os.environ.get("MAILCHIMP_DRY_RUN", "").lower() in ("1", "true", "yes")
+# When MAILCHIMP_AUDIT_LOG is truthy, every tool dispatch emits a structured JSON audit
+# event to stderr (see _emit_audit). Off by default; zero overhead when disabled.
+AUDIT_LOG = os.environ.get("MAILCHIMP_AUDIT_LOG", "").lower() in ("1", "true", "yes")
 
 DEFAULT_ACCOUNT = "default"
+
+# Machine-readable risk tier per tool name ('read' | 'write' | 'destructive'), populated at
+# import by _apply_tool_annotations(). Consumed by the audit layer, the dry-run preview, and
+# the describe_tools introspection tool. Also mirrored into MCP-standard tool annotations
+# (readOnlyHint / destructiveHint / idempotentHint) so a runtime-security gateway can enforce
+# policy on the destructive signal via tools/list instead of guessing which calls are dangerous.
+TOOL_RISK: dict = {}
+
+# Params whose values are bulky or sensitive and must not appear verbatim in audit events.
+_AUDIT_REDACT = frozenset({"file_data"})
 
 
 def _truthy(value: str) -> bool:
@@ -103,20 +119,66 @@ def _resolve_account(account: Optional[str]) -> dict:
     }
 
 
+def _caller_tool() -> Optional[str]:
+    """Name of the @mcp.tool() function that invoked the current chokepoint, if it is a tool.
+
+    Frame layout: 0 = this function, 1 = the chokepoint (_guard_write / mc_request), 2 = the
+    tool. Returns None when the caller is not a registered tool (e.g. internal use or an
+    unknown frame), so audit and risk lookups degrade gracefully.
+    """
+    try:
+        name = sys._getframe(2).f_code.co_name
+    except ValueError:
+        return None
+    return name if name in TOOL_RISK else None
+
+
+def _emit_audit(tool_name: Optional[str], outcome: str, **fields) -> None:
+    """Emit one structured JSON audit event to stderr (no-op unless MAILCHIMP_AUDIT_LOG is on).
+
+    Events carry the tool, its risk tier, the outcome ('executed' / 'blocked_read_only' /
+    'dry_run' / 'error'), the target account, and the inspected call arguments. Bulky or
+    sensitive param values (see _AUDIT_REDACT) are redacted; response bodies are never logged.
+    A gateway can tail this stream as a tamper-evident audit sink.
+    """
+    if not AUDIT_LOG:
+        return
+    event: dict = {
+        "audit": "mailchimp-mcp-server",
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "tool": tool_name,
+        "risk": TOOL_RISK.get(tool_name),
+        "destructive": TOOL_RISK.get(tool_name) == "destructive",
+        "outcome": outcome,
+    }
+    for key, value in fields.items():
+        if value is None:
+            continue
+        if isinstance(value, dict):
+            value = {k: ("<redacted>" if k in _AUDIT_REDACT else v) for k, v in value.items()}
+        event[key] = value
+    print(json.dumps(event, default=str), file=sys.stderr, flush=True)
+
+
 def _guard_write(*, account: Optional[str] = None, **context) -> Optional[str]:
     """Block writes in read-only mode, preview them in dry-run mode.
 
     Evaluates the resolved account's safety flags. Returns a JSON string to
     short-circuit the caller, or None to proceed. `account` is keyword-only so it
-    never leaks into the dry-run preview built from **context.
+    never leaks into the dry-run preview built from **context. The dry-run preview and
+    audit events also surface the caller's risk tier so a gateway sees the destructive signal.
     """
+    caller = _caller_tool()
     resolved = _resolve_account(account)
     if "error" in resolved:
         return json.dumps({"error": resolved["error"]}, indent=2)
     if resolved["read_only"]:
+        _emit_audit(caller, "blocked_read_only", account=resolved["name"], args=dict(context))
         return json.dumps({"error": "Server is in read-only mode. Set MAILCHIMP_READ_ONLY=false to allow writes."}, indent=2)
     if resolved["dry_run"]:
-        return json.dumps({"dry_run": True, **context}, indent=2)
+        risk = TOOL_RISK.get(caller)
+        _emit_audit(caller, "dry_run", account=resolved["name"], args=dict(context))
+        return json.dumps({"dry_run": True, "risk": risk, "destructive": risk == "destructive", **context}, indent=2)
     return None
 
 
@@ -128,6 +190,15 @@ def mc_request(endpoint: str, params: Optional[dict] = None, body: Optional[dict
     api_key = resolved["api_key"]
     if not api_key:
         return {"error": "MAILCHIMP_API_KEY environment variable is not set. Get your API key at https://mailchimp.com/help/about-api-keys/"}
+    # Argument-contract validation: an empty interpolated path id yields a '//' segment, and
+    # count must respect the Mailchimp cap. Reject before dispatching so the gateway and the
+    # model get a clear, consistent error rather than an opaque 4xx.
+    if "//" in endpoint.lstrip("/"):
+        return {"error": "Missing a required path parameter (empty id in endpoint).", "endpoint": endpoint}
+    if params and isinstance(params.get("count"), int) and not (1 <= params["count"] <= 1000):
+        return {"error": "count must be between 1 and 1000.", "count": params["count"]}
+    if AUDIT_LOG:
+        _emit_audit(_caller_tool(), "executed", account=resolved["name"], method=method, endpoint=endpoint, args=params or body)
     url = f"{resolved['base_url']}/{endpoint.lstrip('/')}"
     auth = ("anystring", api_key)
     try:
@@ -7194,6 +7265,88 @@ def list_account_orders(count: int = 10, offset: int = 0, account: str | None = 
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
+
+
+# --- Runtime security guardrails ---
+# Irreversible real sends. Combined with the delete_* prefix, these define the 'destructive'
+# risk tier: irreversible data loss or an irreversible outbound send with wide blast radius.
+_DESTRUCTIVE_SEND = frozenset({"send_campaign", "resend_to_non_openers"})
+
+
+def _classify_risk(name: str, fn) -> str:
+    """Classify a tool as 'read', 'write', or 'destructive'.
+
+    Destructive = irreversible data loss (any delete_* tool, including the GDPR permanent
+    erase) or an irreversible real send. Write = any other tool that routes through the
+    _guard_write chokepoint (detected structurally via the function's referenced globals).
+    Read = everything else. The write/read split is derived, not hand-maintained, so it
+    cannot drift; only the destructive set needs human judgement.
+    """
+    if name.startswith("delete_") or name in _DESTRUCTIVE_SEND:
+        return "destructive"
+    if "_guard_write" in fn.__code__.co_names:
+        return "write"
+    return "read"
+
+
+def _idempotent(name: str) -> bool:
+    """Deletes and PUT-based upserts are safe to repeat; other writes are not asserted idempotent."""
+    return name.startswith("delete_") or name.startswith("upsert_")
+
+
+@mcp.tool()
+def describe_tools() -> str:
+    """List every tool with its machine-readable risk classification for policy enforcement.
+
+    Use this to discover which tools are reads, reversible writes, or destructive (irreversible)
+    before granting access or building automation. A runtime-security gateway can also read the
+    same signal from the MCP tool annotations (readOnlyHint / destructiveHint / idempotentHint)
+    exposed via tools/list; this tool is the convenience, tool-call-based view of that metadata.
+
+    No network call. Read-only, safe to retry.
+
+    Returns:
+        JSON with summary (counts per risk tier and destructive total) and tools array. Each:
+        name, risk ('read' | 'write' | 'destructive'), read_only (bool), destructive (bool),
+        idempotent (bool).
+    """
+    tools = []
+    for name in sorted(TOOL_RISK):
+        risk = TOOL_RISK[name]
+        tools.append({
+            "name": name,
+            "risk": risk,
+            "read_only": risk == "read",
+            "destructive": risk == "destructive",
+            "idempotent": _idempotent(name),
+        })
+    summary = {
+        "total": len(tools),
+        "read": sum(1 for t in tools if t["risk"] == "read"),
+        "write": sum(1 for t in tools if t["risk"] == "write"),
+        "destructive": sum(1 for t in tools if t["risk"] == "destructive"),
+    }
+    return json.dumps({"summary": summary, "tools": tools}, indent=2)
+
+
+def _apply_tool_annotations() -> None:
+    """Populate TOOL_RISK and attach MCP-standard risk annotations to every registered tool.
+
+    Runs once at import, after all tools are registered. Reads the FastMCP tool registry so the
+    risk metadata (readOnlyHint / destructiveHint / idempotentHint) travels through the MCP
+    protocol's tools/list, letting a gateway enforce policy on the destructive signal directly.
+    """
+    for tool in mcp._tool_manager.list_tools():
+        risk = _classify_risk(tool.name, tool.fn)
+        TOOL_RISK[tool.name] = risk
+        tool.annotations = ToolAnnotations(
+            readOnlyHint=risk == "read",
+            destructiveHint=risk == "destructive",
+            idempotentHint=_idempotent(tool.name),
+        )
+
+
+_apply_tool_annotations()
 
 
 def main():
