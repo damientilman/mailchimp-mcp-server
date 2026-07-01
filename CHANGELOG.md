@@ -25,11 +25,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an audience's surveys.
 - **Signup forms** (#16) — `list_signup_forms` and `customize_signup_form` (header, contents,
   and styles) for an audience's default signup form.
+- **Sending foundations & compliance** — **Verified Domains** (list/get/create/verify/delete),
+  **campaign send-checklist** (`get_campaign_send_checklist`), **GDPR** `delete_member_permanent`,
+  and idempotent `upsert_member` (PUT add-or-update).
+- **Reporting & organization** — **Survey reports** (`list_survey_reports`, `get_survey_report`,
+  `get_survey_responses`, `get_survey_response`, `get_survey_questions_report`,
+  `get_survey_question_answers`), **Landing Page reports** (`list_landing_page_reports`,
+  `get_landing_page_report`), campaign `get_campaign_sent_to` and abuse reports, **Campaign and
+  Template folder CRUD**, and audience `get_audience_top_locations` / `get_audience_activity`.
+- **Automation & deliverability** — single-email control for classic automations (get / pause /
+  start / queue / removed-subscribers), `add_member_event`, `get_member_goals`, audience
+  `get_audience_clients` and abuse reports, **batch webhooks CRUD**, `get_chimp_chatter`,
+  account exports, connected sites, authorized apps, campaign collaboration feedback, and RSS
+  campaign pause/resume.
+- **Full e-commerce writes** — CRUD for stores, products, product variants, product images,
+  orders, order lines, and customers, plus account-wide `list_account_orders`. These manual
+  writes target custom/headless storefronts (Shopify/WooCommerce sync automatically).
 
 ### Changed
-- Tool count bumped to **128** (was 115) — README and `glama.json` descriptions updated
-  accordingly. (The previous "115" headline trailed the actual count of 116; this adds
-  multi-account `list_accounts`, File Manager, Surveys, and Signup forms.)
+- Tool count bumped to **226** (was 115) — README and `glama.json` descriptions updated
+  accordingly. Adds multi-account, File Manager, Surveys, Signup forms, Verified Domains,
+  reporting depth, deliverability, automation controls, and full e-commerce writes.
 
 ### Fixed
 - Account selectors are now matched case-insensitively — a capitalized `account`

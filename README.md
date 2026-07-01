@@ -7,7 +7,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io)
 
-The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **128 tools** to query and manage your Mailchimp account from any MCP-compatible client, with A/B campaign support, geographic reporting, full landing-page lifecycle, CRM-style member notes, e-commerce carts and promo codes, Classic Automation + Customer Journey reporting, and read-only / dry-run safety modes.
+The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **226 tools** to query and manage your Mailchimp account from any MCP-compatible client, with A/B campaign support, geographic reporting, full landing-page lifecycle, CRM-style member notes, e-commerce carts and promo codes, Classic Automation + Customer Journey reporting, and read-only / dry-run safety modes.
 
 Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api/) via [`requests`](https://pypi.org/project/requests/). Not based on the official [mailchimp-marketing-python](https://github.com/mailchimp/mailchimp-marketing-python) client. I hit too many issues with it so I went with raw HTTP calls instead.
 
@@ -446,6 +446,125 @@ Replace `mcp-cli` with your client's binary name. For read-only mode, add
 | `create_batch` | Run multiple API operations in bulk |
 | `get_batch_status` | Check status of a batch operation |
 | `list_batches` | List recent batch operations |
+| `list_batch_webhooks` | List batch-completion webhooks |
+| `get_batch_webhook` | Get a single batch webhook |
+| `create_batch_webhook` | Create a batch-completion webhook |
+| `update_batch_webhook` | Update a batch webhook's URL |
+| `delete_batch_webhook` | Delete a batch webhook |
+
+### Verified Domains
+
+| Tool | Description |
+|---|---|
+| `list_verified_domains` | List sending domains and their verification state |
+| `get_verified_domain` | Get a single sending domain's record |
+| `create_verified_domain` | Start verification for a sending domain |
+| `verify_verified_domain` | Complete verification with the emailed code |
+| `delete_verified_domain` | Remove a verified sending domain |
+
+### Connected Sites & Account
+
+| Tool | Description |
+|---|---|
+| `list_connected_sites` | List connected sites for tracking and pop-ups |
+| `get_connected_site` | Get a single connected site with its script |
+| `create_connected_site` | Connect a website and generate its script |
+| `delete_connected_site` | Remove a connected site |
+| `verify_connected_site_script` | Verify the tracking script is installed |
+| `list_authorized_apps` | List OAuth-authorized applications |
+| `get_authorized_app` | Get a single authorized application |
+| `get_chimp_chatter` | Read the account activity feed |
+| `list_account_exports` | List account data export jobs |
+| `get_account_export` | Get an export job's status and download URL |
+| `create_account_export` | Start an account data export |
+
+### Folders
+
+| Tool | Description |
+|---|---|
+| `create_campaign_folder` | Create a campaign folder |
+| `get_campaign_folder` | Get a single campaign folder |
+| `update_campaign_folder` | Rename a campaign folder |
+| `delete_campaign_folder` | Delete a campaign folder |
+| `list_template_folders` | List template folders |
+| `get_template_folder` | Get a single template folder |
+| `create_template_folder` | Create a template folder |
+| `update_template_folder` | Rename a template folder |
+| `delete_template_folder` | Delete a template folder |
+
+### Campaign Extras (checklist, collaboration, RSS)
+
+| Tool | Description |
+|---|---|
+| `get_campaign_send_checklist` | Pre-send readiness checklist |
+| `list_campaign_feedback` | List team collaboration comments |
+| `get_campaign_feedback` | Get a single comment |
+| `create_campaign_feedback` | Add a collaboration comment |
+| `update_campaign_feedback` | Edit a comment |
+| `delete_campaign_feedback` | Delete a comment |
+| `pause_rss_campaign` | Pause an RSS-driven campaign |
+| `resume_rss_campaign` | Resume an RSS-driven campaign |
+
+### Audience Insights & Deliverability
+
+| Tool | Description |
+|---|---|
+| `get_audience_activity` | Recent daily activity for an audience |
+| `get_audience_top_locations` | Top countries of an audience |
+| `get_audience_clients` | Top email clients used by an audience |
+| `list_audience_abuse_reports` | Spam complaints for an audience |
+| `get_audience_abuse_report` | A single audience abuse report |
+
+### Members (compliance & advanced)
+
+| Tool | Description |
+|---|---|
+| `upsert_member` | Add-or-update a member idempotently (PUT) |
+| `delete_member_permanent` | GDPR permanent erasure of a member |
+| `get_member_goals` | A member's recent tracked goal events |
+| `add_member_event` | Record a custom event on a member |
+
+### Automation Emails (single-email control)
+
+| Tool | Description |
+|---|---|
+| `get_automation_email` | Get one email in a classic automation |
+| `pause_automation_email` | Pause a single automation email |
+| `start_automation_email` | Start a single automation email |
+| `add_automation_queue_subscriber` | Enqueue a subscriber for an automation email |
+| `get_automation_queue_subscriber` | Get a subscriber's queue status |
+| `list_automation_removed_subscribers` | List subscribers removed from a workflow |
+| `remove_automation_subscriber` | Remove a subscriber from a workflow |
+| `get_automation_removed_subscriber` | Get a single removed subscriber |
+
+### Reporting (extras)
+
+| Tool | Description |
+|---|---|
+| `get_campaign_sent_to` | Per-recipient delivery status for a campaign |
+| `get_campaign_abuse_reports` | Spam complaints for a campaign |
+| `get_campaign_abuse_report` | A single campaign abuse report |
+| `list_landing_page_reports` | Reports across all landing pages |
+| `get_landing_page_report` | Report for a single landing page |
+| `list_survey_reports` | Reports across all surveys |
+| `get_survey_report` | Report for a single survey |
+| `get_survey_responses` | List a survey's responses |
+| `get_survey_response` | Get a single survey response |
+| `get_survey_questions_report` | Per-question survey report |
+| `get_survey_question_answers` | Answers for a single survey question |
+
+### E-commerce (write)
+
+| Tool | Description |
+|---|---|
+| `create_store` / `get_store` / `update_store` / `delete_store` | Store lifecycle |
+| `get_store_product` / `create_store_product` / `update_store_product` / `delete_store_product` | Product lifecycle |
+| `list_store_product_variants` / `get_store_product_variant` / `create_store_product_variant` / `update_store_product_variant` / `delete_store_product_variant` | Product variants |
+| `list_store_product_images` / `get_store_product_image` / `create_store_product_image` / `update_store_product_image` / `delete_store_product_image` | Product images |
+| `get_store_order` / `create_store_order` / `update_store_order` / `delete_store_order` | Order lifecycle |
+| `list_store_order_lines` / `get_store_order_line` / `create_store_order_line` / `update_store_order_line` / `delete_store_order_line` | Order line items |
+| `get_store_customer` / `create_store_customer` / `update_store_customer` / `delete_store_customer` | Customer lifecycle |
+| `list_account_orders` | List orders across every store |
 
 ## Example Prompts
 

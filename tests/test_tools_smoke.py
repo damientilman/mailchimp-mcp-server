@@ -956,3 +956,108 @@ class TestSignupForms:
         assert payload["action"] == "upload file"
         assert "file_data" not in payload, "raw file data must not leak into the dry-run preview"
         assert calls == []
+
+
+class TestVerifiedDomains:
+    def test_list_verified_domains_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"domains": [], "total_items": 0})
+        server.list_verified_domains()
+        assert calls[0]["endpoint"] == "/verified-domains"
+
+    def test_verify_verified_domain_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"verified": True})
+        server.verify_verified_domain(domain_name="mail.example.com", code="123456")
+        assert calls[0]["method"] == "POST"
+        assert calls[0]["endpoint"] == "/verified-domains/mail.example.com/actions/verify"
+        assert calls[0]["body"]["code"] == "123456"
+
+
+class TestFoldersAndChecklist:
+    def test_create_campaign_folder_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"id": "f1", "name": "Q3"})
+        server.create_campaign_folder(name="Q3")
+        assert calls[0]["method"] == "POST"
+        assert calls[0]["endpoint"] == "/campaign-folders"
+        assert calls[0]["body"]["name"] == "Q3"
+
+    def test_send_checklist_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"is_ready": True, "items": []})
+        payload = _parse(server.get_campaign_send_checklist(campaign_id="c1"))
+        assert payload["is_ready"] is True
+        assert calls[0]["endpoint"] == "/campaigns/c1/send-checklist"
+
+
+class TestMemberComplianceAndUpsert:
+    def test_delete_member_permanent_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"status": "success"})
+        server.delete_member_permanent(list_id="abc", email_address="A@B.com")
+        assert calls[0]["method"] == "POST"
+        assert calls[0]["endpoint"].endswith("/actions/delete-permanent")
+
+    def test_upsert_member_uses_put(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"id": "h", "email_address": "a@b.com", "status": "subscribed"})
+        server.upsert_member(list_id="abc", email_address="a@b.com", merge_fields={"FNAME": "Ada"})
+        assert calls[0]["method"] == "PUT"
+        assert calls[0]["body"]["status_if_new"] == "subscribed"
+        assert calls[0]["body"]["merge_fields"]["FNAME"] == "Ada"
+
+    def test_delete_member_permanent_dry_run(self, monkeypatch, mock_mc_request) -> None:
+        monkeypatch.setattr(server, "DRY_RUN", True)
+        calls = mock_mc_request({"should": "not-be-called"})
+        payload = _parse(server.delete_member_permanent(list_id="abc", email_address="a@b.com"))
+        assert payload["dry_run"] is True
+        assert payload["action"] == "permanently delete member"
+        assert calls == []
+
+
+class TestBatchWebhooks:
+    def test_create_batch_webhook_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"id": "bw1", "url": "https://x", "enabled": True})
+        server.create_batch_webhook(url="https://x")
+        assert calls[0]["method"] == "POST"
+        assert calls[0]["endpoint"] == "/batch-webhooks"
+
+
+class TestAutomationEmailControl:
+    def test_pause_automation_email_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"status": "success"})
+        server.pause_automation_email(workflow_id="w1", workflow_email_id="e1")
+        assert calls[0]["method"] == "POST"
+        assert calls[0]["endpoint"] == "/automations/w1/emails/e1/actions/pause"
+
+
+class TestReportingExtras:
+    def test_survey_responses_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"responses": [], "total_items": 0})
+        server.get_survey_responses(survey_id="s1")
+        assert calls[0]["endpoint"] == "/reporting/surveys/s1/responses"
+
+    def test_landing_page_reports_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"landing_pages": [], "total_items": 0})
+        server.list_landing_page_reports()
+        assert calls[0]["endpoint"] == "/reporting/landing-pages"
+
+
+class TestEcommerceWrites:
+    def test_create_store_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"id": "s1", "name": "Shop"})
+        server.create_store(store_id="s1", name="Shop", currency_code="USD", additional_fields={"list_id": "abc"})
+        assert calls[0]["method"] == "POST"
+        assert calls[0]["endpoint"] == "/ecommerce/stores"
+        assert calls[0]["body"]["currency_code"] == "USD"
+        assert calls[0]["body"]["list_id"] == "abc"
+
+    def test_create_store_order_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"id": "o1"})
+        server.create_store_order(store_id="s1", order_id="o1", customer={"id": "c1"}, lines=[{"id": "l1"}])
+        assert calls[0]["method"] == "POST"
+        assert calls[0]["endpoint"] == "/ecommerce/stores/s1/orders"
+        assert calls[0]["body"]["customer"]["id"] == "c1"
+
+    def test_delete_store_dry_run(self, monkeypatch, mock_mc_request) -> None:
+        monkeypatch.setattr(server, "DRY_RUN", True)
+        calls = mock_mc_request({"should": "not-be-called"})
+        payload = _parse(server.delete_store(store_id="s1"))
+        assert payload["dry_run"] is True
+        assert payload["action"] == "delete store"
+        assert calls == []
