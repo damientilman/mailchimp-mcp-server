@@ -833,3 +833,126 @@ class TestAccounts:
             server.list_audiences(account="foo")
         assert mock_req.call_args.args[1].startswith("https://us9.api.mailchimp.com/3.0/")
         assert mock_req.call_args.kwargs["auth"] == ("anystring", "fookey-us9")
+
+
+class TestFileManager:
+    def test_list_files_extracts_fields(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {
+                "total_items": 1,
+                "files": [
+                    {
+                        "id": 7,
+                        "name": "hero.png",
+                        "type": "image",
+                        "full_size_url": "https://cdn/hero.png",
+                        "thumbnail_url": "https://cdn/t.png",
+                        "size": 1024,
+                        "width": 600,
+                        "height": 400,
+                        "folder_id": 3,
+                        "created_at": "2024-01-01T00:00:00Z",
+                        "created_by": "user",
+                    }
+                ],
+            }
+        )
+        payload = _parse(server.list_files(type="image"))
+        assert payload["total_items"] == 1
+        assert payload["files"][0]["id"] == 7
+        assert payload["files"][0]["full_size_url"].endswith("hero.png")
+        assert calls[0]["params"]["type"] == "image"
+
+    def test_upload_file_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {
+                "id": 9,
+                "name": "a.png",
+                "type": "image",
+                "full_size_url": "u",
+                "thumbnail_url": "t",
+                "size": 1,
+                "width": 1,
+                "height": 1,
+                "folder_id": 3,
+                "created_at": "z",
+            }
+        )
+        payload = _parse(server.upload_file(name="a.png", file_data="Zm9v", folder_id="3"))
+        assert payload["id"] == 9
+        assert calls[0]["method"] == "POST"
+        assert calls[0]["endpoint"] == "/file-manager/files"
+        assert calls[0]["body"]["file_data"] == "Zm9v"
+        assert calls[0]["body"]["folder_id"] == 3
+
+    def test_delete_file_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"status": "success"})
+        payload = _parse(server.delete_file(file_id="7"))
+        assert payload["status"] == "success"
+        assert calls[0]["method"] == "DELETE"
+        assert calls[0]["endpoint"] == "/file-manager/files/7"
+
+    def test_list_file_folders_extracts_fields(self, mock_mc_request) -> None:
+        mock_mc_request(
+            {"total_items": 1, "folders": [{"id": 3, "name": "Campaigns", "file_count": 12, "created_at": "z", "created_by": "u"}]}
+        )
+        payload = _parse(server.list_file_folders())
+        assert payload["folders"][0]["id"] == 3
+        assert payload["folders"][0]["file_count"] == 12
+
+
+class TestSurveys:
+    def test_list_surveys_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {"total_items": 1, "surveys": [{"id": "s1", "title": "NPS", "status": "published", "url": "https://x"}]}
+        )
+        payload = _parse(server.list_surveys(list_id="abc"))
+        assert payload["surveys"][0]["id"] == "s1"
+        assert calls[0]["endpoint"] == "/lists/abc/surveys"
+
+    def test_publish_survey_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"status": "success"})
+        payload = _parse(server.publish_survey(list_id="abc", survey_id="s1"))
+        assert payload["status"] == "published"
+        assert calls[0]["method"] == "POST"
+        assert calls[0]["endpoint"] == "/lists/abc/surveys/s1/actions/publish"
+
+    def test_unpublish_survey_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"status": "success"})
+        payload = _parse(server.unpublish_survey(list_id="abc", survey_id="s1"))
+        assert payload["status"] == "unpublished"
+        assert calls[0]["endpoint"] == "/lists/abc/surveys/s1/actions/unpublish"
+
+
+class TestSignupForms:
+    def test_list_signup_forms_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request(
+            {"signup_forms": [{"signup_form_url": "https://x", "header": {}, "contents": [], "styles": []}]}
+        )
+        payload = _parse(server.list_signup_forms(list_id="abc"))
+        assert payload["signup_forms"][0]["signup_form_url"] == "https://x"
+        assert calls[0]["endpoint"] == "/lists/abc/signup-forms"
+
+    def test_customize_signup_form_dispatch(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"signup_forms": []})
+        server.customize_signup_form(
+            list_id="abc", contents=[{"section": "signup_message", "value": "<p>Hi</p>"}]
+        )
+        assert calls[0]["method"] == "POST"
+        assert calls[0]["endpoint"] == "/lists/abc/signup-forms"
+        assert calls[0]["body"]["contents"][0]["section"] == "signup_message"
+
+    def test_customize_signup_form_requires_a_field(self, mock_mc_request) -> None:
+        calls = mock_mc_request({"signup_forms": []})
+        payload = _parse(server.customize_signup_form(list_id="abc"))
+        assert "error" in payload
+        assert calls == [], "no request should be dispatched when nothing is provided"
+
+    def test_upload_file_dry_run_previews(self, monkeypatch: pytest.MonkeyPatch, mock_mc_request) -> None:
+        monkeypatch.setattr(server, "DRY_RUN", True)
+        calls = mock_mc_request({"should": "not-be-called"})
+        payload = _parse(server.upload_file(name="a.png", file_data="Zm9v"))
+        assert payload["dry_run"] is True
+        assert payload["action"] == "upload file"
+        assert "file_data" not in payload, "raw file data must not leak into the dry-run preview"
+        assert calls == []

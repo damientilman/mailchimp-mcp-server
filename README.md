@@ -7,7 +7,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io)
 
-The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **117 tools** to query and manage your Mailchimp account from any MCP-compatible client, with A/B campaign support, geographic reporting, full landing-page lifecycle, CRM-style member notes, e-commerce carts and promo codes, Classic Automation + Customer Journey reporting, and read-only / dry-run safety modes.
+The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/) — **128 tools** to query and manage your Mailchimp account from any MCP-compatible client, with A/B campaign support, geographic reporting, full landing-page lifecycle, CRM-style member notes, e-commerce carts and promo codes, Classic Automation + Customer Journey reporting, and read-only / dry-run safety modes.
 
 Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api/) via [`requests`](https://pypi.org/project/requests/). Not based on the official [mailchimp-marketing-python](https://github.com/mailchimp/mailchimp-marketing-python) client. I hit too many issues with it so I went with raw HTTP calls instead.
 
@@ -33,6 +33,9 @@ Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api
 - **Automations** - List workflows, inspect emails in a workflow, view queues
 - **Templates** - Browse templates and extract HTML content
 - **Landing pages** - List and inspect landing pages
+- **File Manager** - Browse stored images and files, and folders
+- **Surveys** - List and inspect an audience's surveys
+- **Signup forms** - Inspect an audience's signup forms
 - **E-commerce** - Stores, orders, products, customers (requires e-commerce integration)
 - **Campaign folders** - Browse folder organization
 - **Batch operations** - Monitor bulk operation status
@@ -46,6 +49,9 @@ Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api
 - **Interest categories** - Create and delete categories and interests
 - **Webhooks** - Create and delete webhooks
 - **Templates** - Create, update, and delete email templates
+- **File Manager** - Upload (base64) and delete images and files
+- **Surveys** - Publish and unpublish audience surveys
+- **Signup forms** - Customize header, contents, and styles
 - **Automations** - Pause and start automation workflows
 - **E-commerce** - Cart lifecycle, promo rules, and promo codes for discount workflows
 - **Batch** - Run bulk API operations in a single request
@@ -372,6 +378,32 @@ Replace `mcp-cli` with your client's binary name. For read-only mode, add
 | `delete_landing_page` | Permanently delete a landing page |
 | `publish_landing_page` | Publish a landing page to its public URL |
 | `unpublish_landing_page` | Take a published landing page offline |
+
+### File Manager
+
+| Tool | Description |
+|---|---|
+| `list_files` | List images and files stored in the File Manager |
+| `get_file` | Get a single file's metadata and hosted URL |
+| `upload_file` | Upload a new image or file (base64-encoded) |
+| `delete_file` | Permanently delete a file |
+| `list_file_folders` | List File Manager folders |
+
+### Surveys
+
+| Tool | Description |
+|---|---|
+| `list_surveys` | List an audience's surveys with status and public URL |
+| `get_survey` | Get a single survey's full details |
+| `publish_survey` | Publish a survey to its public URL |
+| `unpublish_survey` | Take a published survey offline |
+
+### Signup Forms
+
+| Tool | Description |
+|---|---|
+| `list_signup_forms` | Get the signup forms configured for an audience |
+| `customize_signup_form` | Customize a signup form's header, contents, and styles |
 
 ### E-commerce
 
