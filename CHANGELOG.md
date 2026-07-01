@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Runtime security guardrails** (#36) — server-side signals a runtime-security gateway can
+  enforce on, following the defense-in-depth split discussed in the community thread:
+  - **Machine-readable risk metadata** — every tool is classified `read` / `write` /
+    `destructive` (irreversible data loss or an irreversible send). Exposed both as
+    MCP-standard tool annotations (`readOnlyHint` / `destructiveHint` / `idempotentHint`) via
+    `tools/list` and through a new **`describe_tools`** read tool (per-tool risk + tier counts).
+  - **Structured audit log** — `MAILCHIMP_AUDIT_LOG=true` emits one JSON event per dispatch to
+    stderr (tool, risk tier, destructive flag, account, outcome, inspected args) from the two
+    chokepoints; bulky/sensitive values (e.g. `file_data`) are redacted, response bodies never
+    logged. Off by default with zero overhead.
+  - **Argument-contract validation** — `mc_request` rejects out-of-range `count` (must be
+    1–1000) and missing path IDs before dispatch, and the dry-run preview now carries the
+    tool's risk tier.
 - **Multi-account support** (#37) — configure additional Mailchimp accounts with
   `MAILCHIMP_API_KEY_<NAME>` environment variables (the plain `MAILCHIMP_API_KEY`
   remains the implicit `default`). Every tool gains an optional `account` argument to
@@ -43,9 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes target custom/headless storefronts (Shopify/WooCommerce sync automatically).
 
 ### Changed
-- Tool count bumped to **226** (was 115) — README and `glama.json` descriptions updated
+- Tool count bumped to **227** (was 115) — README and `glama.json` descriptions updated
   accordingly. Adds multi-account, File Manager, Surveys, Signup forms, Verified Domains,
-  reporting depth, deliverability, automation controls, and full e-commerce writes.
+  reporting depth, deliverability, automation controls, full e-commerce writes, and the
+  `describe_tools` risk-metadata tool.
 
 ### Fixed
 - Account selectors are now matched case-insensitively — a capitalized `account`
