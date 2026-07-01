@@ -17,3 +17,7 @@ htmlcov/
 .ruff_cache/
 .mypy_cache/
 uv.lock
+
+# Local working notes (plans, growth drafts) - never publish
+tasks/
+.DS_Store
