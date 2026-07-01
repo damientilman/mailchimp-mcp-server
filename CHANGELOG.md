@@ -19,11 +19,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configured accounts. Single-key setups are unaffected and behave exactly as before.
 - **`list_accounts`** — read-only tool returning the configured account names and their
   read-only / dry-run state, for discovering valid `account` values. Never returns API keys.
+- **File Manager** (#14) — `list_files`, `get_file`, `upload_file` (base64), `delete_file`,
+  and `list_file_folders`, enabling programmatic image hosting for campaign and template content.
+- **Surveys** (#15) — `list_surveys`, `get_survey`, `publish_survey`, and `unpublish_survey`
+  for an audience's surveys.
+- **Signup forms** (#16) — `list_signup_forms` and `customize_signup_form` (header, contents,
+  and styles) for an audience's default signup form.
 
 ### Changed
-- Tool count bumped to **117** (was 115) — README and `glama.json` descriptions updated
-  accordingly. (The previous "115" headline trailed the actual count of 116; this corrects
-  it and adds `list_accounts`.)
+- Tool count bumped to **128** (was 115) — README and `glama.json` descriptions updated
+  accordingly. (The previous "115" headline trailed the actual count of 116; this adds
+  multi-account `list_accounts`, File Manager, Surveys, and Signup forms.)
+
+### Fixed
+- Account selectors are now matched case-insensitively — a capitalized `account`
+  (e.g. `"Marketing"`, `"Default"`) resolves to the configured account instead of erroring,
+  matching how account names are lowercased when the registry is built.
 
 ## [0.7.0] - 2026-06-24
 

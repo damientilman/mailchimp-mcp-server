@@ -89,6 +89,19 @@ class TestResolveAccount:
         assert "default" in resolved["error"]
         assert "tts" in resolved["error"]
 
+    def test_selector_is_case_insensitive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Names are lowercased when the registry is built, so resolution must match
+        # case-insensitively; a capitalized selector still routes to the account.
+        monkeypatch.setattr(server, "MAILCHIMP_API_KEY", "live-us1")
+        monkeypatch.setattr(
+            server,
+            "MAILCHIMP_ACCOUNTS",
+            {"marketing": {"api_key": "k-us5", "dc": "us5", "base_url": "https://us5.api.mailchimp.com/3.0", "read_only": False, "dry_run": False}},
+        )
+        assert server._resolve_account("Marketing")["name"] == "marketing"
+        assert server._resolve_account("MARKETING")["api_key"] == "k-us5"
+        assert server._resolve_account("Default")["name"] == "default"
+
     def test_available_names_includes_default_only_when_key_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(server, "MAILCHIMP_ACCOUNTS", {"tts": {"read_only": False, "dry_run": False}})
         monkeypatch.setattr(server, "MAILCHIMP_API_KEY", "live-us1")

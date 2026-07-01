@@ -1,7 +1,7 @@
 {
   "$schema": "https://glama.ai/mcp/schemas/server.json",
   "name": "mailchimp-mcp",
-  "description": "MCP server for the Mailchimp Marketing API. 117 tools for managing campaigns, audiences, members, templates, segments, Classic Automations and Customer Journey workarounds, reports, e-commerce (carts, promo rules and codes), A/B testing, landing pages, CRM notes, multi-account support, and more.",
+  "description": "MCP server for the Mailchimp Marketing API. 128 tools for managing campaigns, audiences, members, templates, segments, Classic Automations and Customer Journey workarounds, reports, e-commerce (carts, promo rules and codes), A/B testing, landing pages, CRM notes, multi-account support, File Manager, surveys, signup forms, and more.",
   "author": {
     "name": "Damien Tilman",
     "url": "https://github.com/damientilman"

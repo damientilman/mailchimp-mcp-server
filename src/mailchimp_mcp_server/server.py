@@ -77,8 +77,11 @@ def _resolve_account(account: Optional[str]) -> dict:
     account -- so single-key setups and the existing test monkeypatches behave exactly
     as before. A named account is looked up in MAILCHIMP_ACCOUNTS. Unknown names return
     an {"error": ...} dict listing the available accounts. account=None never auto-routes
-    to a named account, even if only one is configured.
+    to a named account, even if only one is configured. Selectors are matched
+    case-insensitively, since account names are lowercased when the registry is built.
     """
+    if account is not None:
+        account = account.lower()
     if account is None or account == DEFAULT_ACCOUNT:
         return {
             "name": DEFAULT_ACCOUNT,
@@ -4512,6 +4515,326 @@ def trigger_customer_journey(journey_id: str, step_id: str, email_address: str, 
         account=account,
     )
     return json.dumps({"status": "triggered", "journey_id": journey_id, "step_id": step_id, "email_address": email_address}, indent=2)
+
+
+@mcp.tool()
+def list_files(count: int = 10, offset: int = 0, type: Optional[str] = None, account: str | None = None) -> str:
+    """List images and files stored in the account's File Manager.
+
+    Use to discover file_id and hosted URLs for embedding images in campaign or template
+    content. Use get_file for one file's full metadata, upload_file to add a new one, and
+    list_file_folders to browse the folder structure.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        count: Files to return (1-1000, default 10).
+        offset: Pagination offset. Use when total_items exceeds count.
+        type: Optional media type filter. Either 'image' or 'file' (non-image). Omit for all.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with total_items and files array. Each file: id (use as file_id), name, type
+        ('image' or 'file'), full_size_url (hosted URL for embedding), thumbnail_url, size
+        (bytes), width, height, folder_id, created_at, created_by.
+    """
+    params: dict = {"count": count, "offset": offset}
+    if type:
+        params["type"] = type
+    data = mc_request("/file-manager/files", params=params, account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    files = []
+    for f in data.get("files", []):
+        files.append({
+            "id": f.get("id"),
+            "name": f.get("name"),
+            "type": f.get("type"),
+            "full_size_url": f.get("full_size_url"),
+            "thumbnail_url": f.get("thumbnail_url"),
+            "size": f.get("size"),
+            "width": f.get("width"),
+            "height": f.get("height"),
+            "folder_id": f.get("folder_id"),
+            "created_at": f.get("created_at"),
+            "created_by": f.get("created_by"),
+        })
+    return json.dumps({"total_items": data.get("total_items"), "files": files}, indent=2)
+
+
+@mcp.tool()
+def get_file(file_id: str, account: str | None = None) -> str:
+    """Retrieve full metadata for a single File Manager file.
+
+    Use when you have a file_id (from list_files) and need its hosted URL, dimensions, or
+    folder. Use list_files to browse and discover file_ids.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 error if file_id is invalid.
+
+    Args:
+        file_id: File ID (numeric, as a string) from list_files.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with id, name, type, full_size_url, thumbnail_url, size, width, height,
+        folder_id, created_at, created_by.
+    """
+    data = mc_request(f"/file-manager/files/{file_id}", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def upload_file(name: str, file_data: str, folder_id: Optional[str] = None, account: str | None = None) -> str:
+    """Upload a new image or file to the File Manager (base64-encoded).
+
+    Enables programmatic image hosting for campaign and template content: upload here, then
+    reference the returned full_size_url in your HTML. Use list_file_folders to target a
+    folder, list_files to browse existing files, and delete_file to remove one.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        name: File name including extension (e.g. 'hero.png'). Shown in the File Manager.
+        file_data: The file content, base64-encoded (not a URL or raw bytes).
+        folder_id: Optional folder ID (from list_file_folders) to upload into. Omit for the root.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with id (use as file_id), name, type, full_size_url (hosted URL for embedding),
+        thumbnail_url, size, width, height, folder_id, created_at.
+    """
+    if (guard := _guard_write(action="upload file", name=name, folder_id=folder_id, account=account)):
+        return guard
+    body: dict = {"name": name, "file_data": file_data}
+    if folder_id:
+        body["folder_id"] = int(folder_id)
+    data = mc_request("/file-manager/files", body=body, method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "type": data.get("type"),
+        "full_size_url": data.get("full_size_url"),
+        "thumbnail_url": data.get("thumbnail_url"),
+        "size": data.get("size"),
+        "width": data.get("width"),
+        "height": data.get("height"),
+        "folder_id": data.get("folder_id"),
+        "created_at": data.get("created_at"),
+    }, indent=2)
+
+
+@mcp.tool()
+def delete_file(file_id: str, account: str | None = None) -> str:
+    """Permanently delete a file from the File Manager.
+
+    Irreversible. Any campaign or template still referencing the file's hosted URL will show a
+    broken image afterwards. Use list_files to find the file_id and get_file to confirm the
+    target before deleting.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        file_id: File ID (numeric, as a string) from list_files.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with status 'success' on deletion, or an error object if file_id is invalid.
+    """
+    if (guard := _guard_write(action="delete file", file_id=file_id, account=account)):
+        return guard
+    data = mc_request(f"/file-manager/files/{file_id}", method="DELETE", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def list_file_folders(count: int = 10, offset: int = 0, account: str | None = None) -> str:
+    """List folders in the account's File Manager.
+
+    Use to discover folder_id values for organizing or targeting uploads via upload_file. Use
+    list_files to see the files themselves.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        count: Folders to return (1-1000, default 10).
+        offset: Pagination offset. Use when total_items exceeds count.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with total_items and folders array. Each folder: id (use as folder_id), name,
+        file_count, created_at, created_by.
+    """
+    data = mc_request("/file-manager/folders", params={"count": count, "offset": offset}, account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    folders = []
+    for fo in data.get("folders", []):
+        folders.append({
+            "id": fo.get("id"),
+            "name": fo.get("name"),
+            "file_count": fo.get("file_count"),
+            "created_at": fo.get("created_at"),
+            "created_by": fo.get("created_by"),
+        })
+    return json.dumps({"total_items": data.get("total_items"), "folders": folders}, indent=2)
+
+
+@mcp.tool()
+def list_surveys(list_id: str, account: str | None = None) -> str:
+    """List all surveys for an audience with their status and public URL.
+
+    Use to discover survey_id values and see which surveys are live. Use get_survey for one
+    survey's full detail, and publish_survey / unpublish_survey to change its live state.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 error if list_id is invalid.
+
+    Args:
+        list_id: Audience/list ID (from list_audiences).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with total_items and surveys array. Each survey typically includes id (use as
+        survey_id), title, status ('draft', 'published', or 'unpublished'), url (public survey
+        URL), created_at, updated_at.
+    """
+    data = mc_request(f"/lists/{list_id}/surveys", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({"total_items": data.get("total_items"), "surveys": data.get("surveys", [])}, indent=2)
+
+
+@mcp.tool()
+def get_survey(list_id: str, survey_id: str, account: str | None = None) -> str:
+    """Retrieve full details for a single survey.
+
+    Use when you have a survey_id (from list_surveys) and need its questions, status, or public
+    URL. Use publish_survey / unpublish_survey to change whether it is live.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 error if list_id or survey_id is invalid.
+
+    Args:
+        list_id: Audience/list ID (from list_audiences).
+        survey_id: Survey ID (from list_surveys).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON survey object including id, title, status, url, questions, created_at, updated_at.
+    """
+    data = mc_request(f"/lists/{list_id}/surveys/{survey_id}", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def publish_survey(list_id: str, survey_id: str, account: str | None = None) -> str:
+    """Publish a survey, making it live at its public URL.
+
+    Works for surveys in draft, unpublished, or previously-published-then-edited state. Use
+    list_surveys to find the survey_id and check its status. Use unpublish_survey to take it
+    back down.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        list_id: Audience/list ID (from list_audiences).
+        survey_id: Survey ID (from list_surveys).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with status 'published' and the survey_id, or an error object.
+    """
+    if (guard := _guard_write(action="publish survey", list_id=list_id, survey_id=survey_id, account=account)):
+        return guard
+    data = mc_request(f"/lists/{list_id}/surveys/{survey_id}/actions/publish", method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({"status": "published", "survey_id": survey_id}, indent=2)
+
+
+@mcp.tool()
+def unpublish_survey(list_id: str, survey_id: str, account: str | None = None) -> str:
+    """Unpublish a survey that is currently live, taking it offline.
+
+    Use list_surveys to find the survey_id and confirm it is published. Use publish_survey to
+    put it back live.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        list_id: Audience/list ID (from list_audiences).
+        survey_id: Survey ID (from list_surveys).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with status 'unpublished' and the survey_id, or an error object.
+    """
+    if (guard := _guard_write(action="unpublish survey", list_id=list_id, survey_id=survey_id, account=account)):
+        return guard
+    data = mc_request(f"/lists/{list_id}/surveys/{survey_id}/actions/unpublish", method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({"status": "unpublished", "survey_id": survey_id}, indent=2)
+
+
+@mcp.tool()
+def list_signup_forms(list_id: str, account: str | None = None) -> str:
+    """Get the signup forms (header, body content, and styles) configured for an audience.
+
+    Use to inspect the current hosted and embedded signup forms before changing them with
+    customize_signup_form.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+    Returns 404 error if list_id is invalid.
+
+    Args:
+        list_id: Audience/list ID (from list_audiences).
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with signup_forms array. Each entry has header (object), contents (array of
+        {section, value}), styles (array of {section, options}), and signup_form_url.
+    """
+    data = mc_request(f"/lists/{list_id}/signup-forms", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def customize_signup_form(list_id: str, header: Optional[dict] = None, contents: Optional[list] = None, styles: Optional[list] = None, account: str | None = None) -> str:
+    """Customize an audience's default signup form (header, content sections, and styles).
+
+    At least one of header, contents, or styles must be provided. Use list_signup_forms first
+    to inspect the current form and mirror its structure.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        list_id: Audience/list ID (from list_audiences).
+        header: Optional header object, e.g. {"image_url": "...", "text": "...", "background_color": "..."}.
+        contents: Optional array of content sections, each {"section": <name>, "value": <html>}.
+            Section names include 'signup_message', 'unsub_message', 'signup_thank_you_title'.
+        styles: Optional array of style sections, each {"section": <name>, "options": [{"property": <name>, "value": <val>}]}.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the updated signup form configuration, or an error object.
+    """
+    body: dict = {}
+    if header is not None:
+        body["header"] = header
+    if contents is not None:
+        body["contents"] = contents
+    if styles is not None:
+        body["styles"] = styles
+    if not body:
+        return json.dumps({"error": "Provide at least one of header, contents, or styles to customize."}, indent=2)
+    if (guard := _guard_write(action="customize signup form", list_id=list_id, account=account)):
+        return guard
+    data = mc_request(f"/lists/{list_id}/signup-forms", body=body, method="POST", account=account)
+    return json.dumps(data, indent=2)
 
 
 def main():
