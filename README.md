@@ -19,6 +19,41 @@ Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api
   <img src="https://glama.ai/mcp/servers/damientilman/mailchimp-mcp/badges/score.svg" alt="Mailchimp MCP server score" />
 </a>
 
+## Quick start
+
+```bash
+uvx mailchimp-mcp   # no install required; just needs MAILCHIMP_API_KEY
+```
+
+Add it to your MCP client (Claude Desktop, Cursor, Cline, …):
+
+```json
+{
+  "mcpServers": {
+    "mailchimp": {
+      "command": "uvx",
+      "args": ["mailchimp-mcp"],
+      "env": {
+        "MAILCHIMP_API_KEY": "your-key-us8",
+        "MAILCHIMP_READ_ONLY": "true"
+      }
+    }
+  }
+}
+```
+
+Tip: start with `MAILCHIMP_READ_ONLY=true` to explore safely, then flip it off when you are ready to write. See [Configuration](#configuration) for all options.
+
+## Demo
+
+> _Demo recording coming soon._ A short clip showing a live session lands here (contributions welcome).
+
+A typical exchange:
+
+> **You:** Which of my last 5 campaigns had the worst click rate, and what does Mailchimp suggest to fix it?
+>
+> **Assistant:** *(chains `list_campaigns` → `get_campaign_report` for each → `get_campaign_advice`)* Your "March Digest" had the lowest click rate at 1.2%. Mailchimp suggests tightening the subject line and moving your primary CTA above the fold…
+
 ## Features
 
 **Read**
@@ -611,6 +646,16 @@ Once connected, you can ask your MCP client to perform requests like:
 - *"What advice does Mailchimp have for improving my last campaign?"*
 - *"Pause my welcome automation"*
 - *"List all orders from my Shopify store this month"*
+
+### Workflow recipes
+
+Multi-step requests that chain tools end to end:
+
+- **Weekly performance review** — *"Summarise my last week: list campaigns sent since Monday, pull each report, and rank them by click rate with one takeaway each."* Chains `search_campaigns` → `get_campaign_report` → `get_campaign_advice`.
+- **Deliverability audit** — *"Check my sending health: are my domains verified, any spam complaints on recent campaigns, and how did the last one perform by recipient domain?"* Chains `list_verified_domains` → `get_campaign_abuse_reports` → `get_domain_performance`.
+- **Re-engagement** — *"Find everyone who didn't open my last newsletter and resend it with a new subject line."* Chains `get_campaign_report` → `resend_to_non_openers`.
+- **Safe send** — *"Dry-run a campaign to my VIP segment, show me the send checklist, then send it once I confirm."* With `MAILCHIMP_DRY_RUN=true`, previews via `create_campaign` → `get_campaign_send_checklist` → `send_campaign`.
+- **Agencies (multi-account)** — *"For both the `acme` and `globex` accounts, list this month's top campaign by open rate."* Passes `account="acme"` / `account="globex"` per call. See [Multi-account](#multi-account).
 
 ## Contributing
 
