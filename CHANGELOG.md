@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-01
+
 ### Added
 - **Runtime security guardrails** (#36) — server-side signals a runtime-security gateway can
   enforce on, following the defense-in-depth split discussed in the community thread:
@@ -65,6 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Account selectors are now matched case-insensitively — a capitalized `account`
   (e.g. `"Marketing"`, `"Default"`) resolves to the configured account instead of erroring,
   matching how account names are lowercased when the registry is built.
+- The `ToolAnnotations` import is now optional — on older `mcp` SDKs that predate tool
+  annotations the server still imports and runs; risk metadata remains available via
+  `describe_tools`, only the `tools/list` annotations are skipped.
 
 ## [0.7.0] - 2026-06-24
 
