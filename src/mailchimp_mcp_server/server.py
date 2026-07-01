@@ -7,7 +7,11 @@ from typing import Optional
 
 import requests
 from mcp.server.fastmcp import FastMCP
-from mcp.types import ToolAnnotations
+
+try:
+    from mcp.types import ToolAnnotations
+except ImportError:  # older mcp SDK without tool annotations; risk metadata still ships via describe_tools
+    ToolAnnotations = None
 
 # --- Config ---
 # The plain MAILCHIMP_API_KEY is the implicit "default" account. It is served from
@@ -7339,11 +7343,12 @@ def _apply_tool_annotations() -> None:
     for tool in mcp._tool_manager.list_tools():
         risk = _classify_risk(tool.name, tool.fn)
         TOOL_RISK[tool.name] = risk
-        tool.annotations = ToolAnnotations(
-            readOnlyHint=risk == "read",
-            destructiveHint=risk == "destructive",
-            idempotentHint=_idempotent(tool.name),
-        )
+        if ToolAnnotations is not None:
+            tool.annotations = ToolAnnotations(
+                readOnlyHint=risk == "read",
+                destructiveHint=risk == "destructive",
+                idempotentHint=_idempotent(tool.name),
+            )
 
 
 _apply_tool_annotations()
