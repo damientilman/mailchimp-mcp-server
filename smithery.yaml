@@ -1,0 +1,40 @@
+# Smithery configuration for one-click install (https://smithery.ai/docs).
+# Local stdio server run via uvx. Verify field names against the current Smithery
+# docs before publishing; a hosted deployment would additionally need a Dockerfile.
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required:
+      - mailchimpApiKey
+    properties:
+      mailchimpApiKey:
+        type: string
+        title: Mailchimp API key
+        description: "Format <key>-<dc>, e.g. abc123-us8. The datacenter is derived from the key."
+      readOnly:
+        type: boolean
+        default: false
+        title: Read-only mode
+        description: Block all write tools (recommended while exploring).
+      dryRun:
+        type: boolean
+        default: false
+        title: Dry-run mode
+        description: Preview writes without calling the API.
+      auditLog:
+        type: boolean
+        default: false
+        title: Audit log
+        description: Emit a structured JSON audit event per tool dispatch to stderr.
+  commandFunction: |-
+    (config) => ({
+      command: 'uvx',
+      args: ['mailchimp-mcp'],
+      env: {
+        MAILCHIMP_API_KEY: config.mailchimpApiKey,
+        MAILCHIMP_READ_ONLY: String(config.readOnly ?? false),
+        MAILCHIMP_DRY_RUN: String(config.dryRun ?? false),
+        MAILCHIMP_AUDIT_LOG: String(config.auditLog ?? false)
+      }
+    })
