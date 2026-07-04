@@ -44,16 +44,6 @@ Add it to your MCP client (Claude Desktop, Cursor, Cline, …):
 
 Tip: start with `MAILCHIMP_READ_ONLY=true` to explore safely, then flip it off when you are ready to write. See [Configuration](#configuration) for all options.
 
-## Demo
-
-> _Demo recording coming soon._ A short clip showing a live session lands here (contributions welcome).
-
-A typical exchange:
-
-> **You:** Which of my last 5 campaigns had the worst click rate, and what does Mailchimp suggest to fix it?
->
-> **Assistant:** *(chains `list_campaigns` → `get_campaign_report` for each → `get_campaign_advice`)* Your "March Digest" had the lowest click rate at 1.2%. Mailchimp suggests tightening the subject line and moving your primary CTA above the fold…
-
 ## Features
 
 **Read**
