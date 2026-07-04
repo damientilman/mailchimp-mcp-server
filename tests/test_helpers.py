@@ -51,7 +51,7 @@ class TestMcRequest:
         mock_resp.status_code = 200
         mock_resp.ok = True
         mock_resp.json.return_value = {"health_check": "Everything's Chimpy!"}
-        with patch.object(requests, "request", return_value=mock_resp) as mock_req:
+        with patch.object(requests.Session, "request", return_value=mock_resp) as mock_req:
             result = server.mc_request("/ping")
         assert result == {"health_check": "Everything's Chimpy!"}
         called_url = mock_req.call_args.args[1]
@@ -61,7 +61,7 @@ class TestMcRequest:
         mock_resp = MagicMock()
         mock_resp.status_code = 204
         mock_resp.ok = True
-        with patch.object(requests, "request", return_value=mock_resp):
+        with patch.object(requests.Session, "request", return_value=mock_resp):
             result = server.mc_request("/lists/abc/members/xyz", method="DELETE")
         assert result == {"status": "success"}
 
@@ -70,7 +70,7 @@ class TestMcRequest:
         mock_resp.status_code = 404
         mock_resp.ok = False
         mock_resp.json.return_value = {"title": "Resource Not Found", "detail": "List abc does not exist."}
-        with patch.object(requests, "request", return_value=mock_resp):
+        with patch.object(requests.Session, "request", return_value=mock_resp):
             result = server.mc_request("/lists/abc")
         assert result["error"] == "Resource Not Found"
         assert "does not exist" in result["detail"]
@@ -82,19 +82,19 @@ class TestMcRequest:
         mock_resp.ok = False
         mock_resp.json.side_effect = ValueError("not json")
         mock_resp.text = "Internal Server Error"
-        with patch.object(requests, "request", return_value=mock_resp):
+        with patch.object(requests.Session, "request", return_value=mock_resp):
             result = server.mc_request("/lists")
         assert "HTTP 500" in result["error"]
         assert "Internal Server Error" in result["detail"]
 
     def test_timeout_returns_error(self) -> None:
-        with patch.object(requests, "request", side_effect=requests.exceptions.Timeout):
+        with patch.object(requests.Session, "request", side_effect=requests.exceptions.Timeout):
             result = server.mc_request("/ping")
         assert "timed out" in result["error"].lower()
         assert result["endpoint"] == "/ping"
 
     def test_connection_error_returns_error(self) -> None:
-        with patch.object(requests, "request", side_effect=requests.exceptions.ConnectionError):
+        with patch.object(requests.Session, "request", side_effect=requests.exceptions.ConnectionError):
             result = server.mc_request("/ping")
         assert "connect" in result["error"].lower()
         assert result["endpoint"] == "/ping"
@@ -104,7 +104,7 @@ class TestMcRequest:
         mock_resp.status_code = 200
         mock_resp.ok = True
         mock_resp.json.return_value = {"id": "abc123"}
-        with patch.object(requests, "request", return_value=mock_resp) as mock_req:
+        with patch.object(requests.Session, "request", return_value=mock_resp) as mock_req:
             server.mc_request("/lists/abc/members", body={"email_address": "a@b.com"}, method="POST")
         args, kwargs = mock_req.call_args
         assert args[0] == "POST"
@@ -123,7 +123,7 @@ class TestMcRequestAccounts:
         mock_resp.status_code = 200
         mock_resp.ok = True
         mock_resp.json.return_value = {"ok": True}
-        with patch.object(requests, "request", return_value=mock_resp) as mock_req:
+        with patch.object(requests.Session, "request", return_value=mock_resp) as mock_req:
             server.mc_request("/lists", account="foo")
         called_url = mock_req.call_args.args[1]
         assert called_url == "https://us9.api.mailchimp.com/3.0/lists"
@@ -139,13 +139,13 @@ class TestMcRequestAccounts:
         mock_resp.status_code = 200
         mock_resp.ok = True
         mock_resp.json.return_value = {"ok": True}
-        with patch.object(requests, "request", return_value=mock_resp) as mock_req:
+        with patch.object(requests.Session, "request", return_value=mock_resp) as mock_req:
             server.mc_request("/lists")
         assert mock_req.call_args.args[1] == "https://us1.api.mailchimp.com/3.0/lists"
         assert mock_req.call_args.kwargs["auth"] == ("anystring", "test-key-us1")
 
     def test_unknown_account_returns_error_without_network(self) -> None:
-        with patch.object(requests, "request") as mock_req:
+        with patch.object(requests.Session, "request") as mock_req:
             result = server.mc_request("/lists", account="nope")
         assert "error" in result
         assert "nope" in result["error"]

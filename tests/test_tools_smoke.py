@@ -829,7 +829,7 @@ class TestAccounts:
         mock_resp.status_code = 200
         mock_resp.ok = True
         mock_resp.json.return_value = {"lists": [], "total_items": 0}
-        with patch.object(requests, "request", return_value=mock_resp) as mock_req:
+        with patch.object(requests.Session, "request", return_value=mock_resp) as mock_req:
             server.list_audiences(account="foo")
         assert mock_req.call_args.args[1].startswith("https://us9.api.mailchimp.com/3.0/")
         assert mock_req.call_args.kwargs["auth"] == ("anystring", "fookey-us9")

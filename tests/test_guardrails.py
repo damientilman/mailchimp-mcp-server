@@ -59,7 +59,7 @@ class TestArgumentValidation:
         mock_resp.status_code = 200
         mock_resp.ok = True
         mock_resp.json.return_value = {"account_name": "Acme"}
-        with patch.object(requests, "request", return_value=mock_resp):
+        with patch.object(requests.Session, "request", return_value=mock_resp):
             out = server.mc_request("/")
         assert out == {"account_name": "Acme"}
 
@@ -96,7 +96,7 @@ class TestAuditLog:
         mock_resp.status_code = 200
         mock_resp.ok = True
         mock_resp.json.return_value = {"lists": [], "total_items": 0}
-        with patch.object(requests, "request", return_value=mock_resp):
+        with patch.object(requests.Session, "request", return_value=mock_resp):
             server.list_audiences()
         events = _events(capsys.readouterr().err)
         match = [e for e in events if e["tool"] == "list_audiences"]
@@ -110,7 +110,7 @@ class TestAuditLog:
         mock_resp.status_code = 200
         mock_resp.ok = True
         mock_resp.json.return_value = {"id": 1}
-        with patch.object(requests, "request", return_value=mock_resp):
+        with patch.object(requests.Session, "request", return_value=mock_resp):
             server.upload_file(name="a.png", file_data="SUPERSECRETBASE64")
         err = capsys.readouterr().err
         assert "SUPERSECRETBASE64" not in err

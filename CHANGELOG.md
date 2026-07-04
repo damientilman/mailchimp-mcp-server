@@ -7,17 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `delete_member` and `tag_member` now surface the API error instead of always reporting
+  success — a failed GDPR deletion no longer returns a false `permanently_deleted` confirmation.
+- Malformed JSON passed to `batch_subscribe`, `create_segment`, `update_segment`, or
+  `create_batch` returns a readable error instead of raising an unhandled exception.
+- Path parameters containing `..` are rejected before dispatch, closing an endpoint-traversal
+  gap the empty-segment (`//`) check missed.
+- Audit log now redacts subscriber PII (`email_address`, `email`, `merge_fields`) at any depth,
+  including inside `batch_subscribe` member arrays; previously only `file_data` was masked.
+- Corrected the contradictory docs on `delete_member` / `delete_member_permanent`: both call the
+  same permanent-deletion endpoint and are equivalent.
+
 ### Added
 - **Tool profiles** — `MAILCHIMP_TOOLS` selects which tools to expose, to shrink the tool-list
   payload sent to the model on every turn. Accepts a comma-separated mix of risk tiers
   (`read` / `write` / `destructive`) and/or exact tool names; unset or `all` exposes everything.
   Example: `MAILCHIMP_TOOLS=read` loads ~115 read tools (~29k tokens) instead of all 227 (~63k).
+- **Automatic retries** on transient failures (429 and 5xx) with exponential backoff, honoring
+  the `Retry-After` header. Configurable via `MAILCHIMP_MAX_RETRIES` (default 3). Network
+  timeouts are not retried, so a write that may already have landed is never replayed.
+- **Connection pooling** — one keep-alive `requests.Session` per account, so sequential calls
+  reuse the TCP/TLS connection instead of reconnecting each time.
 
 ### Changed
 - **Leaner tool descriptions** — repeated per-tool boilerplate (the "Authenticated via API key…"
   note and the identical `account:` argument line) is trimmed from the wire descriptions at
   import, cutting the full tool-list footprint by roughly 18% with no loss of tool-selection
   information. Source docstrings are unchanged.
+- Email addresses are validated before use; a malformed address returns a clear error instead
+  of a confusing 404 against a hash that matches no member.
+- `batch_subscribe` enforces the documented 500-member cap, and `offset` must be zero or greater.
 
 ## [1.0.0] - 2026-07-01
 
