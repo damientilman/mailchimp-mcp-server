@@ -134,6 +134,7 @@ pip install -e .
 | `MAILCHIMP_READ_ONLY_<NAME>` | No | Read-only mode for a specific named account (default: `false`) |
 | `MAILCHIMP_DRY_RUN_<NAME>` | No | Dry-run mode for a specific named account (default: `false`) |
 | `MAILCHIMP_AUDIT_LOG` | No | Set to `true` to emit a structured JSON audit event per tool dispatch to stderr (default: `false`). See [Runtime security](#runtime-security). |
+| `MAILCHIMP_TOOLS` | No | Expose only a subset of tools to shrink the model's tool-list footprint (default: all). See [Tool profiles](#tool-profiles). |
 
 The datacenter (`us8`, `us21`, etc.) is automatically extracted from each key.
 
@@ -155,6 +156,22 @@ The server is designed for defense-in-depth alongside an external MCP gateway: i
 **Structured audit log** — With `MAILCHIMP_AUDIT_LOG=true`, each dispatch emits one JSON event to stderr with the tool, its risk tier, the `destructive` flag, the target account, the outcome (`executed` / `blocked_read_only` / `dry_run`), and the inspected arguments. Bulky or sensitive values (e.g. base64 `file_data`) are redacted and response bodies are never logged, so the stream is a safe audit sink to tail centrally.
 
 **Argument-contract validation** — All writes funnel through a single `_guard_write` chokepoint, and every request is validated before dispatch (pagination `count` capped to 1–1000, missing path IDs rejected), so malformed calls fail fast and consistently instead of hitting the API.
+
+### Tool profiles
+
+Exposing all 227 tools sends a large tool list to the model on every turn (~63k tokens). If you only need part of the surface, load a subset with one line:
+
+```json
+"env": { "MAILCHIMP_API_KEY": "your-key-us8", "MAILCHIMP_TOOLS": "read" }
+```
+
+`MAILCHIMP_TOOLS` accepts a comma-separated mix of **risk tiers** (`read`, `write`, `destructive`) and/or **exact tool names**; a tool is kept if either matches. Unset (or `all`) exposes everything.
+
+- `read` — reporting and analytics only (~115 tools, ~29k tokens). A safe, lightweight default for exploration.
+- `read,write` — everything except irreversible tools.
+- `list_campaigns,get_campaign_report,send_campaign` — a hand-picked minimal set.
+
+Tool descriptions are also trimmed of repeated boilerplate before they reach the model, so even the full set is leaner than the raw docstrings. Use `describe_tools` to see each tool's risk tier.
 
 ### Multi-account
 

@@ -25,6 +25,10 @@ DRY_RUN = os.environ.get("MAILCHIMP_DRY_RUN", "").lower() in ("1", "true", "yes"
 # When MAILCHIMP_AUDIT_LOG is truthy, every tool dispatch emits a structured JSON audit
 # event to stderr (see _emit_audit). Off by default; zero overhead when disabled.
 AUDIT_LOG = os.environ.get("MAILCHIMP_AUDIT_LOG", "").lower() in ("1", "true", "yes")
+# MAILCHIMP_TOOLS selects which tools to expose, to shrink the tools/list payload the client
+# sends to the model. Empty or "all" exposes everything; otherwise a comma-separated mix of risk
+# tiers (read / write / destructive) and/or exact tool names. See _selected_tool_names.
+TOOLS_PROFILE = os.environ.get("MAILCHIMP_TOOLS", "").strip()
 
 DEFAULT_ACCOUNT = "default"
 
@@ -7351,7 +7355,69 @@ def _apply_tool_annotations() -> None:
             )
 
 
+def _slim_description(text: str) -> str:
+    """Drop the two per-tool boilerplate lines from the wire description.
+
+    Every docstring repeats the "Authenticated via API key. Max 10 concurrent requests..."
+    note and an identical `account:` argument line. They add nothing to tool selection and,
+    multiplied across 200+ tools, cost thousands of tokens in every tools/list. Only the
+    runtime Tool.description is trimmed; the source docstrings stay full for developers.
+    """
+    lines = [
+        line for line in text.split("\n")
+        if not line.strip().startswith("Authenticated via API key.")
+        and not (line.strip().startswith("account:") and "MAILCHIMP_API_KEY_<NAME>" in line)
+    ]
+    # Drop an "Args:" header left empty once `account` was its only entry.
+    cleaned = []
+    for i, line in enumerate(lines):
+        if line.strip() == "Args:":
+            following = next((n.strip() for n in lines[i + 1:] if n.strip()), "")
+            if not following or following.startswith("Returns:"):
+                continue
+        cleaned.append(line)
+    out = "\n".join(cleaned)
+    while "\n\n\n" in out:
+        out = out.replace("\n\n\n", "\n\n")
+    return out.strip()
+
+
+def _optimize_descriptions() -> None:
+    """Shrink the tools/list payload by trimming boilerplate from every tool's wire description."""
+    for tool in mcp._tool_manager.list_tools():
+        if tool.description:
+            tool.description = _slim_description(tool.description)
+
+
+def _selected_tool_names(spec: str, risk_map: dict) -> Optional[set]:
+    """Resolve the MAILCHIMP_TOOLS spec to the set of tool names to keep, or None for all.
+
+    spec is a comma-separated mix of risk tiers ('read' / 'write' / 'destructive') and/or exact
+    tool names. A tool is kept if its name is listed or its risk tier is listed. Empty or 'all'
+    returns None (keep everything).
+    """
+    spec = (spec or "").strip().lower()
+    if not spec or spec == "all":
+        return None
+    wanted = {part.strip() for part in spec.split(",") if part.strip()}
+    tiers = wanted & {"read", "write", "destructive"}
+    return {name for name, risk in risk_map.items() if name in wanted or risk in tiers}
+
+
+def _apply_tool_profile() -> None:
+    """Remove tools outside the selected MAILCHIMP_TOOLS profile from the registry."""
+    keep = _selected_tool_names(TOOLS_PROFILE, TOOL_RISK)
+    if keep is None:
+        return
+    for name in list(TOOL_RISK):
+        if name not in keep:
+            mcp._tool_manager.remove_tool(name)
+            del TOOL_RISK[name]
+
+
 _apply_tool_annotations()
+_optimize_descriptions()
+_apply_tool_profile()
 
 
 def main():
