@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Tool profiles** — `MAILCHIMP_TOOLS` selects which tools to expose, to shrink the tool-list
+  payload sent to the model on every turn. Accepts a comma-separated mix of risk tiers
+  (`read` / `write` / `destructive`) and/or exact tool names; unset or `all` exposes everything.
+  Example: `MAILCHIMP_TOOLS=read` loads ~115 read tools (~29k tokens) instead of all 227 (~63k).
+
+### Changed
+- **Leaner tool descriptions** — repeated per-tool boilerplate (the "Authenticated via API key…"
+  note and the identical `account:` argument line) is trimmed from the wire descriptions at
+  import, cutting the full tool-list footprint by roughly 18% with no loss of tool-selection
+  information. Source docstrings are unchanged.
+
 ## [1.0.0] - 2026-07-01
 
 ### Added
