@@ -1,6 +1,5 @@
 # Smithery configuration for one-click install (https://smithery.ai/docs).
-# Local stdio server run via uvx. Verify field names against the current Smithery
-# docs before publishing; a hosted deployment would additionally need a Dockerfile.
+# Local stdio server run via uvx.
 startCommand:
   type: stdio
   configSchema:
