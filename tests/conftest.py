@@ -27,6 +27,8 @@ def _reset_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "MAILCHIMP_DC", "us1")
     monkeypatch.setattr(server, "MAILCHIMP_BASE_URL", "https://us1.api.mailchimp.com/3.0")
     monkeypatch.setattr(server, "MAILCHIMP_ACCOUNTS", {})
+    # Retry backoff must never actually block the test suite.
+    monkeypatch.setattr(server.time, "sleep", lambda *args, **kwargs: None)
 
 
 @pytest.fixture

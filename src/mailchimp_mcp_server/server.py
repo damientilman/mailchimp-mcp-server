@@ -1,7 +1,9 @@
 import hashlib
 import json
 import os
+import re
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -30,6 +32,18 @@ AUDIT_LOG = os.environ.get("MAILCHIMP_AUDIT_LOG", "").lower() in ("1", "true", "
 # tiers (read / write / destructive) and/or exact tool names. See _selected_tool_names.
 TOOLS_PROFILE = os.environ.get("MAILCHIMP_TOOLS", "").strip()
 
+# Transient HTTP failures are retried with exponential backoff. Mailchimp caps concurrency at
+# 10 and returns 429 (with a Retry-After header) when throttled; 5xx are typically upstream
+# blips. The count is configurable via MAILCHIMP_MAX_RETRIES (default 3, i.e. up to 4 attempts).
+# Network exceptions (timeout / connection reset) are NOT retried: a write may already have
+# landed server-side, so replaying it could duplicate the effect.
+try:
+    MAX_RETRIES = max(0, int(os.environ.get("MAILCHIMP_MAX_RETRIES", "3")))
+except ValueError:
+    MAX_RETRIES = 3
+_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+_BACKOFF_BASE = 1.0  # seconds; attempt N waits _BACKOFF_BASE * 2**N -> 1s, 2s, 4s
+
 DEFAULT_ACCOUNT = "default"
 
 # Machine-readable risk tier per tool name ('read' | 'write' | 'destructive'), populated at
@@ -39,8 +53,10 @@ DEFAULT_ACCOUNT = "default"
 # policy on the destructive signal via tools/list instead of guessing which calls are dangerous.
 TOOL_RISK: dict = {}
 
-# Params whose values are bulky or sensitive and must not appear verbatim in audit events.
-_AUDIT_REDACT = frozenset({"file_data"})
+# Params whose values are bulky or sensitive (PII) and must not appear verbatim in audit
+# events: subscriber emails and merge fields (name, address, phone) fall under GDPR, and
+# file_data is bulky base64. Redacted to '<redacted>' by _emit_audit before the event is written.
+_AUDIT_REDACT = frozenset({"file_data", "email_address", "email", "merge_fields"})
 
 
 def _truthy(value: str) -> bool:
@@ -145,9 +161,10 @@ def _emit_audit(tool_name: Optional[str], outcome: str, **fields) -> None:
     """Emit one structured JSON audit event to stderr (no-op unless MAILCHIMP_AUDIT_LOG is on).
 
     Events carry the tool, its risk tier, the outcome ('executed' / 'blocked_read_only' /
-    'dry_run' / 'error'), the target account, and the inspected call arguments. Bulky or
-    sensitive param values (see _AUDIT_REDACT) are redacted; response bodies are never logged.
-    A gateway can tail this stream as a tamper-evident audit sink.
+    'dry_run' / 'error'), the target account, and the inspected call arguments. Sensitive PII
+    and bulky param values (see _AUDIT_REDACT) are redacted at any depth, including inside
+    nested member lists (e.g. batch_subscribe); response bodies are never logged. A gateway can
+    tail this stream as a tamper-evident audit sink.
     """
     if not AUDIT_LOG:
         return
@@ -162,10 +179,18 @@ def _emit_audit(tool_name: Optional[str], outcome: str, **fields) -> None:
     for key, value in fields.items():
         if value is None:
             continue
-        if isinstance(value, dict):
-            value = {k: ("<redacted>" if k in _AUDIT_REDACT else v) for k, v in value.items()}
-        event[key] = value
+        event[key] = _redact_pii(value)
     print(json.dumps(event, default=str), file=sys.stderr, flush=True)
+
+
+def _redact_pii(value):
+    """Recursively replace any _AUDIT_REDACT key's value with '<redacted>', descending into
+    nested dicts and lists so PII buried in a member array is masked too."""
+    if isinstance(value, dict):
+        return {k: ("<redacted>" if k in _AUDIT_REDACT else _redact_pii(v)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_pii(item) for item in value]
+    return value
 
 
 def _guard_write(*, account: Optional[str] = None, **context) -> Optional[str]:
@@ -190,6 +215,43 @@ def _guard_write(*, account: Optional[str] = None, **context) -> Optional[str]:
     return None
 
 
+# One pooled requests.Session per account (keyed by account name) so sequential tool calls
+# reuse the TCP/TLS connection instead of paying a fresh handshake each time. Populated lazily.
+_SESSIONS: dict = {}
+
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _subscriber_hash(email_address: str) -> Optional[str]:
+    """Mailchimp's subscriber hash: MD5 of the lowercased email. Returns None when the address
+    is not a plausible email, so callers can surface a clear error instead of a confusing 404
+    against a hash that points at no one."""
+    if not email_address or not _EMAIL_RE.match(email_address.strip()):
+        return None
+    return hashlib.md5(email_address.strip().lower().encode()).hexdigest()
+
+
+def _session_for(name: str) -> requests.Session:
+    session = _SESSIONS.get(name)
+    if session is None:
+        session = requests.Session()
+        _SESSIONS[name] = session
+    return session
+
+
+def _retry_delay(resp: "requests.Response", attempt: int) -> float:
+    """Seconds to wait before the next attempt: honor the server's Retry-After header when
+    present (429 throttling), otherwise fall back to exponential backoff (1s, 2s, 4s...)."""
+    retry_after = resp.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(0.0, float(retry_after))
+        except (TypeError, ValueError):
+            pass
+    return _BACKOFF_BASE * (2 ** attempt)
+
+
 def mc_request(endpoint: str, params: Optional[dict] = None, body: Optional[dict] = None, method: str = "GET", *, account: Optional[str] = None) -> dict:
     """Make an authenticated request to the Mailchimp API for the resolved account."""
     resolved = _resolve_account(account)
@@ -201,20 +263,31 @@ def mc_request(endpoint: str, params: Optional[dict] = None, body: Optional[dict
     # Argument-contract validation: an empty interpolated path id yields a '//' segment, and
     # count must respect the Mailchimp cap. Reject before dispatching so the gateway and the
     # model get a clear, consistent error rather than an opaque 4xx.
-    if "//" in endpoint.lstrip("/"):
+    stripped = endpoint.lstrip("/")
+    if "//" in stripped:
         return {"error": "Missing a required path parameter (empty id in endpoint).", "endpoint": endpoint}
+    if ".." in stripped.split("/"):
+        return {"error": "Invalid path segment (a path parameter contains '..').", "endpoint": endpoint}
     if params and isinstance(params.get("count"), int) and not (1 <= params["count"] <= 1000):
         return {"error": "count must be between 1 and 1000.", "count": params["count"]}
+    if params and isinstance(params.get("offset"), int) and params["offset"] < 0:
+        return {"error": "offset must be zero or greater.", "offset": params["offset"]}
     if AUDIT_LOG:
         _emit_audit(_caller_tool(), "executed", account=resolved["name"], method=method, endpoint=endpoint, args=params or body)
     url = f"{resolved['base_url']}/{endpoint.lstrip('/')}"
     auth = ("anystring", api_key)
-    try:
-        resp = requests.request(method, url, auth=auth, params=params, json=body, timeout=30)
-    except requests.exceptions.Timeout:
-        return {"error": "Request timed out after 30 seconds", "endpoint": endpoint}
-    except requests.exceptions.ConnectionError:
-        return {"error": "Could not connect to Mailchimp API", "endpoint": endpoint}
+    session = _session_for(resolved["name"])
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            resp = session.request(method, url, auth=auth, params=params, json=body, timeout=30)
+        except requests.exceptions.Timeout:
+            return {"error": "Request timed out after 30 seconds", "endpoint": endpoint}
+        except requests.exceptions.ConnectionError:
+            return {"error": "Could not connect to Mailchimp API", "endpoint": endpoint}
+        if resp.status_code in _RETRY_STATUSES and attempt < MAX_RETRIES:
+            time.sleep(_retry_delay(resp, attempt))
+            continue
+        break
     if resp.status_code == 204:
         return {"status": "success"}
     if not resp.ok:
@@ -982,7 +1055,9 @@ def delete_template(template_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="delete template", template_id=template_id, account=account)):
         return guard
-    mc_request(f"/templates/{template_id}", method="DELETE", account=account)
+    data = mc_request(f"/templates/{template_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "template_id": template_id}, indent=2)
 
 
@@ -1094,7 +1169,9 @@ def update_member(list_id: str, email_address: str, status: Optional[str] = None
     """
     if (guard := _guard_write(action="update member", email_address=email_address, list_id=list_id, account=account)):
         return guard
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     body: dict = {}
     if status:
         body["status"] = status
@@ -1133,7 +1210,9 @@ def unsubscribe_member(list_id: str, email_address: str, account: str | None = N
     """
     if (guard := _guard_write(action="unsubscribe member", email_address=email_address, list_id=list_id, account=account)):
         return guard
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}", body={"status": "unsubscribed"}, method="PATCH", account=account)
     return json.dumps({
         "email_address": data.get("email_address"),
@@ -1146,8 +1225,9 @@ def delete_member(list_id: str, email_address: str, account: str | None = None) 
     """Permanently delete a member and all their data from an audience.
 
     Use only for complete data removal (e.g. GDPR right-to-erasure requests). All activity history,
-    merge field data, and tag associations are permanently lost. Use unsubscribe_member instead to
-    stop sending while preserving data for reporting. There is no undo.
+    merge field data, and tag associations are permanently lost. Equivalent to delete_member_permanent
+    (same endpoint). Use unsubscribe_member instead to stop sending while preserving data for
+    reporting. There is no undo.
 
     Authenticated via API key. Subject to Mailchimp API rate limits (max 10 concurrent requests). This operation is irreversible. Respects read-only and dry-run modes.
 
@@ -1165,8 +1245,12 @@ def delete_member(list_id: str, email_address: str, account: str | None = None) 
     """
     if (guard := _guard_write(action="permanently delete member", email_address=email_address, list_id=list_id, account=account)):
         return guard
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
-    mc_request(f"/lists/{list_id}/members/{subscriber_hash}/actions/delete-permanent", method="POST", account=account)
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
+    data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/actions/delete-permanent", method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "permanently_deleted", "email_address": email_address}, indent=2)
 
 
@@ -1180,8 +1264,8 @@ def tag_member(list_id: str, email_address: str, tags_to_add: Optional[str] = No
     tag/segment, add_member with tags param for tagging at signup, update_member for profile/status
     changes, get_member_tags to check current tags.
 
-    Authenticated via API key (read scope required). Max 10 concurrent requests. Respects
-    read-only and dry-run modes. Returns 404 error if the member does not exist.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 error if the member does not exist.
 
     Args:
         list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
@@ -1195,7 +1279,9 @@ def tag_member(list_id: str, email_address: str, tags_to_add: Optional[str] = No
     """
     if (guard := _guard_write(action="update member tags", email_address=email_address, list_id=list_id, account=account)):
         return guard
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     tags = []
     if tags_to_add:
         for t in tags_to_add.split(","):
@@ -1203,7 +1289,9 @@ def tag_member(list_id: str, email_address: str, tags_to_add: Optional[str] = No
     if tags_to_remove:
         for t in tags_to_remove.split(","):
             tags.append({"name": t.strip(), "status": "inactive"})
-    mc_request(f"/lists/{list_id}/members/{subscriber_hash}/tags", body={"tags": tags}, method="POST", account=account)
+    data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/tags", body={"tags": tags}, method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "updated", "email_address": email_address, "tags": tags}, indent=2)
 
 
@@ -1231,7 +1319,12 @@ def batch_subscribe(list_id: str, members_json: str, update_existing: bool = Tru
     """
     if (guard := _guard_write(action="batch subscribe members", list_id=list_id, account=account)):
         return guard
-    members = json.loads(members_json)
+    try:
+        members = json.loads(members_json)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid members_json: {e}"}, indent=2)
+    if isinstance(members, list) and len(members) > 500:
+        return json.dumps({"error": f"members_json holds {len(members)} members; the max is 500. Use create_batch for larger imports."}, indent=2)
     body = {"members": members, "update_existing": update_existing}
     data = mc_request(f"/lists/{list_id}", body=body, method="POST", account=account)
     return json.dumps({
@@ -1599,7 +1692,9 @@ def schedule_campaign(campaign_id: str, schedule_time: str, account: str | None 
     """
     if (guard := _guard_write(action="schedule campaign", campaign_id=campaign_id, schedule_time=schedule_time, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}/actions/schedule", body={"schedule_time": schedule_time}, method="POST", account=account)
+    data = mc_request(f"/campaigns/{campaign_id}/actions/schedule", body={"schedule_time": schedule_time}, method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "scheduled", "campaign_id": campaign_id, "schedule_time": schedule_time}, indent=2)
 
 
@@ -1627,7 +1722,9 @@ def unschedule_campaign(campaign_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="unschedule campaign", campaign_id=campaign_id, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}/actions/unschedule", method="POST", account=account)
+    data = mc_request(f"/campaigns/{campaign_id}/actions/unschedule", method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "unscheduled", "campaign_id": campaign_id}, indent=2)
 
 
@@ -1688,7 +1785,9 @@ def delete_campaign(campaign_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="delete campaign", campaign_id=campaign_id, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}", method="DELETE", account=account)
+    data = mc_request(f"/campaigns/{campaign_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "campaign_id": campaign_id}, indent=2)
 
 
@@ -1717,7 +1816,9 @@ def send_campaign(campaign_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="send campaign", campaign_id=campaign_id, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}/actions/send", method="POST", account=account)
+    data = mc_request(f"/campaigns/{campaign_id}/actions/send", method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "sent", "campaign_id": campaign_id}, indent=2)
 
 
@@ -1744,7 +1845,9 @@ def send_test_email(campaign_id: str, test_emails: str, send_type: str = "html",
         return guard
     email_list = [e.strip() for e in test_emails.split(",")]
     body = {"test_emails": email_list, "send_type": send_type}
-    mc_request(f"/campaigns/{campaign_id}/actions/test", body=body, method="POST", account=account)
+    data = mc_request(f"/campaigns/{campaign_id}/actions/test", body=body, method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "test_sent", "campaign_id": campaign_id, "test_emails": email_list}, indent=2)
 
 
@@ -1766,7 +1869,9 @@ def cancel_send(campaign_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="cancel campaign send", campaign_id=campaign_id, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}/actions/cancel-send", method="POST", account=account)
+    data = mc_request(f"/campaigns/{campaign_id}/actions/cancel-send", method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "cancelled", "campaign_id": campaign_id}, indent=2)
 
 
@@ -1797,7 +1902,10 @@ def create_segment(list_id: str, name: str, static: bool = True, match: Optional
         return guard
     body: dict = {"name": name}
     if match and conditions_json:
-        conditions = json.loads(conditions_json)
+        try:
+            conditions = json.loads(conditions_json)
+        except json.JSONDecodeError as e:
+            return json.dumps({"error": f"Invalid conditions_json: {e}"}, indent=2)
         body["options"] = {"match": match, "conditions": conditions}
     elif static:
         body["static_segment"] = []
@@ -1831,7 +1939,9 @@ def delete_segment(list_id: str, segment_id: str, account: str | None = None) ->
     """
     if (guard := _guard_write(action="delete segment", list_id=list_id, segment_id=segment_id, account=account)):
         return guard
-    mc_request(f"/lists/{list_id}/segments/{segment_id}", method="DELETE", account=account)
+    data = mc_request(f"/lists/{list_id}/segments/{segment_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "segment_id": segment_id}, indent=2)
 
 
@@ -1933,7 +2043,10 @@ def update_segment(list_id: str, segment_id: str, name: Optional[str] = None, ma
     if name:
         body["name"] = name
     if match and conditions_json:
-        conditions = json.loads(conditions_json)
+        try:
+            conditions = json.loads(conditions_json)
+        except json.JSONDecodeError as e:
+            return json.dumps({"error": f"Invalid conditions_json: {e}"}, indent=2)
         body["options"] = {"match": match, "conditions": conditions}
     data = mc_request(f"/lists/{list_id}/segments/{segment_id}", body=body, method="PATCH", account=account)
     return json.dumps({
@@ -2176,7 +2289,9 @@ def delete_merge_field(list_id: str, merge_id: str, account: str | None = None) 
     """
     if (guard := _guard_write(action="delete merge field", list_id=list_id, merge_id=merge_id, account=account)):
         return guard
-    mc_request(f"/lists/{list_id}/merge-fields/{merge_id}", method="DELETE", account=account)
+    data = mc_request(f"/lists/{list_id}/merge-fields/{merge_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "merge_id": merge_id}, indent=2)
 
 
@@ -2345,7 +2460,9 @@ def delete_interest_category(list_id: str, category_id: str, account: str | None
     """
     if (guard := _guard_write(action="delete interest category", list_id=list_id, category_id=category_id, account=account)):
         return guard
-    mc_request(f"/lists/{list_id}/interest-categories/{category_id}", method="DELETE", account=account)
+    data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "category_id": category_id}, indent=2)
 
 
@@ -2373,7 +2490,9 @@ def delete_interest(list_id: str, category_id: str, interest_id: str, account: s
     """
     if (guard := _guard_write(action="delete interest", list_id=list_id, category_id=category_id, interest_id=interest_id, account=account)):
         return guard
-    mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests/{interest_id}", method="DELETE", account=account)
+    data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests/{interest_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "interest_id": interest_id}, indent=2)
 
 
@@ -2470,7 +2589,9 @@ def delete_webhook(list_id: str, webhook_id: str, account: str | None = None) ->
     """
     if (guard := _guard_write(action="delete webhook", list_id=list_id, webhook_id=webhook_id, account=account)):
         return guard
-    mc_request(f"/lists/{list_id}/webhooks/{webhook_id}", method="DELETE", account=account)
+    data = mc_request(f"/lists/{list_id}/webhooks/{webhook_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "webhook_id": webhook_id}, indent=2)
 
 
@@ -2799,7 +2920,9 @@ def get_member_activity(list_id: str, email_address: str, count: int = 20, accou
         JSON with email_address and activity array. Each: action ('open'/'click'/'bounce'),
         timestamp, campaign_id, title.
     """
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/activity", params={"count": count}, account=account)
     activities = []
     for a in data.get("activity", []):
@@ -2834,7 +2957,9 @@ def get_member_tags(list_id: str, email_address: str, count: int = 50, account: 
     Example:
         get_member_tags(list_id="abc123", email_address="jane@co.com") -> {"email_address": "jane@co.com", "total_items": 3, "tags": [{"name": "VIP", "date_added": "2025-01-15T10:00:00Z", ...}]}
     """
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/tags", params={"count": count}, account=account)
     tags = []
     for t in data.get("tags", []):
@@ -2869,7 +2994,9 @@ def get_member_events(list_id: str, email_address: str, count: int = 20, account
     Example:
         get_member_events(list_id="abc123", email_address="jane@co.com") -> {"email_address": "jane@co.com", "total_items": 5, "events": [{"name": "purchased", "occurred_at": "2025-06-01T10:00:00Z", "properties": {"product": "T-Shirt"}}]}
     """
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/events", params={"count": count}, account=account)
     events = []
     for e in data.get("events", []):
@@ -2908,7 +3035,9 @@ def get_member_journey_events(list_id: str, email_address: str, count: int = 50,
         filtering), and events array. Each event: action (raw action type), timestamp, title
         (campaign / automation title if present), url (link clicked if any), campaign_id.
     """
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(
         f"/lists/{list_id}/members/{subscriber_hash}/activity-feed",
         params={"count": count},
@@ -2959,7 +3088,9 @@ def list_member_notes(list_id: str, email_address: str, count: int = 20, offset:
         JSON with email_address, total_items, and notes array. Each note: id (use as note_id),
         note (string, the text), created_at, created_by, updated_at.
     """
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(
         f"/lists/{list_id}/members/{subscriber_hash}/notes",
         params={"count": count, "offset": offset},
@@ -3002,7 +3133,9 @@ def add_member_note(list_id: str, email_address: str, note: str, account: str | 
     """
     if (guard := _guard_write(action="add member note", list_id=list_id, email_address=email_address, account=account)):
         return guard
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(
         f"/lists/{list_id}/members/{subscriber_hash}/notes",
         body={"note": note},
@@ -3042,7 +3175,9 @@ def update_member_note(list_id: str, email_address: str, note_id: str, note: str
     """
     if (guard := _guard_write(action="update member note", list_id=list_id, email_address=email_address, note_id=note_id, account=account)):
         return guard
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(
         f"/lists/{list_id}/members/{subscriber_hash}/notes/{note_id}",
         body={"note": note},
@@ -3080,7 +3215,9 @@ def delete_member_note(list_id: str, email_address: str, note_id: str, account: 
     """
     if (guard := _guard_write(action="delete member note", list_id=list_id, email_address=email_address, note_id=note_id, account=account)):
         return guard
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     result = mc_request(
         f"/lists/{list_id}/members/{subscriber_hash}/notes/{note_id}",
         method="DELETE",
@@ -3175,7 +3312,9 @@ def pause_automation(automation_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="pause automation", automation_id=automation_id, account=account)):
         return guard
-    mc_request(f"/automations/{automation_id}/actions/pause-all-emails", method="POST", account=account)
+    data = mc_request(f"/automations/{automation_id}/actions/pause-all-emails", method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "paused", "automation_id": automation_id}, indent=2)
 
 
@@ -3201,7 +3340,9 @@ def start_automation(automation_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="start automation", automation_id=automation_id, account=account)):
         return guard
-    mc_request(f"/automations/{automation_id}/actions/start-all-emails", method="POST", account=account)
+    data = mc_request(f"/automations/{automation_id}/actions/start-all-emails", method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "started", "automation_id": automation_id}, indent=2)
 
 
@@ -4337,7 +4478,10 @@ def create_batch(operations: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="run batch operations", account=account)):
         return guard
-    ops = json.loads(operations)
+    try:
+        ops = json.loads(operations)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid operations: {e}"}, indent=2)
     data = mc_request("/batches", body={"operations": ops}, method="POST", account=account)
     return json.dumps({
         "id": data.get("id"),
@@ -4587,12 +4731,14 @@ def trigger_customer_journey(journey_id: str, step_id: str, email_address: str, 
     """
     if (guard := _guard_write(action="trigger customer journey", journey_id=journey_id, step_id=step_id, email_address=email_address, account=account)):
         return guard
-    mc_request(
+    data = mc_request(
         f"/customer-journeys/journeys/{journey_id}/steps/{step_id}/actions/trigger",
         body={"email_address": email_address},
         method="POST",
         account=account,
     )
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "triggered", "journey_id": journey_id, "step_id": step_id, "email_address": email_address}, indent=2)
 
 
@@ -5026,7 +5172,9 @@ def delete_verified_domain(domain_name: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="delete verified domain", domain_name=domain_name, account=account)):
         return guard
-    mc_request(f"/verified-domains/{domain_name}", method="DELETE", account=account)
+    data = mc_request(f"/verified-domains/{domain_name}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "domain_name": domain_name}, indent=2)
 
 
@@ -5115,7 +5263,9 @@ def delete_connected_site(connected_site_id: str, account: str | None = None) ->
     """
     if (guard := _guard_write(action="delete connected site", connected_site_id=connected_site_id, account=account)):
         return guard
-    mc_request(f"/connected-sites/{connected_site_id}", method="DELETE", account=account)
+    data = mc_request(f"/connected-sites/{connected_site_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "connected_site_id": connected_site_id}, indent=2)
 
 
@@ -5355,7 +5505,9 @@ def delete_campaign_folder(folder_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="delete campaign folder", folder_id=folder_id, account=account)):
         return guard
-    mc_request(f"/campaign-folders/{folder_id}", method="DELETE", account=account)
+    data = mc_request(f"/campaign-folders/{folder_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "folder_id": folder_id}, indent=2)
 
 
@@ -5465,7 +5617,9 @@ def delete_template_folder(folder_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="delete template folder", folder_id=folder_id, account=account)):
         return guard
-    mc_request(f"/template-folders/{folder_id}", method="DELETE", account=account)
+    data = mc_request(f"/template-folders/{folder_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "folder_id": folder_id}, indent=2)
 
 
@@ -5608,7 +5762,9 @@ def delete_campaign_feedback(campaign_id: str, feedback_id: str, account: str | 
     """
     if (guard := _guard_write(action="delete campaign feedback", campaign_id=campaign_id, feedback_id=feedback_id, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}/feedback/{feedback_id}", method="DELETE", account=account)
+    data = mc_request(f"/campaigns/{campaign_id}/feedback/{feedback_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "campaign_id": campaign_id, "feedback_id": feedback_id}, indent=2)
 
 
@@ -5867,7 +6023,9 @@ def get_member_goals(list_id: str, email_address: str, account: str | None = Non
         JSON with total_items and goals array. Each: goal_id, event (the tracked value), last_visited_at
         (ISO 8601), data (the URL or event data). Returns error if the member is not found.
     """
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/goals", account=account)
     return json.dumps(data, indent=2)
 
@@ -5894,7 +6052,9 @@ def add_member_event(list_id: str, email_address: str, name: str, properties: Op
     """
     if (guard := _guard_write(action="add member event", list_id=list_id, email_address=email_address, account=account)):
         return guard
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     body: dict = {"name": name}
     if properties is not None:
         body["properties"] = properties
@@ -5907,9 +6067,9 @@ def delete_member_permanent(list_id: str, email_address: str, account: str | Non
     """Permanently and irreversibly erase an audience member (GDPR-style deletion).
 
     IRREVERSIBLE: this permanently deletes all personal data for the member and prevents that
-    email from ever being re-imported into the audience. This differs from the archive-style
-    delete_member (which only archives the member and can be re-added); use delete_member unless
-    a true GDPR erasure is required.
+    email from ever being re-imported into the audience. This tool and delete_member are
+    equivalent: both call the same permanent-deletion endpoint. To merely stop sending while
+    keeping the member for reporting, use unsubscribe_member instead.
 
     Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
 
@@ -5924,7 +6084,9 @@ def delete_member_permanent(list_id: str, email_address: str, account: str | Non
     """
     if (guard := _guard_write(action="permanently delete member", list_id=list_id, email_address=email_address, account=account)):
         return guard
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/actions/delete-permanent", method="POST", account=account)
     return json.dumps(data, indent=2)
 
@@ -5953,7 +6115,9 @@ def upsert_member(list_id: str, email_address: str, status_if_new: str = "subscr
     """
     if (guard := _guard_write(action="upsert member", list_id=list_id, email_address=email_address, account=account)):
         return guard
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     body: dict = {"email_address": email_address, "status_if_new": status_if_new}
     if merge_fields is not None:
         body["merge_fields"] = merge_fields
@@ -6186,7 +6350,9 @@ def get_automation_queue_subscriber(workflow_id: str, workflow_email_id: str, em
     Returns:
         JSON with the queued subscriber details.
     """
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/automations/{workflow_id}/emails/{workflow_email_id}/queue/{subscriber_hash}", account=account)
     return json.dumps(data, indent=2)
 
@@ -6253,7 +6419,9 @@ def get_automation_removed_subscriber(workflow_id: str, email_address: str, acco
     Returns:
         JSON with the removed subscriber details.
     """
-    subscriber_hash = hashlib.md5(email_address.lower().encode()).hexdigest()
+    subscriber_hash = _subscriber_hash(email_address)
+    if subscriber_hash is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/automations/{workflow_id}/removed-subscribers/{subscriber_hash}", account=account)
     return json.dumps(data, indent=2)
 
@@ -7280,6 +7448,11 @@ def list_account_orders(count: int = 10, offset: int = 0, account: str | None = 
 # risk tier: irreversible data loss or an irreversible outbound send with wide blast radius.
 _DESTRUCTIVE_SEND = frozenset({"send_campaign", "resend_to_non_openers"})
 
+# Writes that are safe to repeat but whose names carry no delete_/upsert_ prefix, so the derived
+# rule below cannot infer them. Kept explicit (like _DESTRUCTIVE_SEND) so the idempotent hint
+# matches what each tool's docstring already states.
+_IDEMPOTENT_WRITES = frozenset({"update_member", "tag_member", "update_segment", "publish_landing_page"})
+
 
 def _classify_risk(name: str, fn) -> str:
     """Classify a tool as 'read', 'write', or 'destructive'.
@@ -7298,8 +7471,9 @@ def _classify_risk(name: str, fn) -> str:
 
 
 def _idempotent(name: str) -> bool:
-    """Deletes and PUT-based upserts are safe to repeat; other writes are not asserted idempotent."""
-    return name.startswith("delete_") or name.startswith("upsert_")
+    """Deletes, PUT-based upserts, and the explicitly-listed re-appliable updates are safe to
+    repeat; other writes are not asserted idempotent."""
+    return name.startswith("delete_") or name.startswith("upsert_") or name in _IDEMPOTENT_WRITES
 
 
 @mcp.tool()
