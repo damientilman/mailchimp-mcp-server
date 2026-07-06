@@ -64,7 +64,8 @@ uv run ruff check src/ tests/      # lint
 uv run ruff format src/ tests/     # format
 ```
 
-CI will fail on lint or format violations, so run these before opening a PR.
+CI runs `ruff check` and fails on lint violations, so run it before opening a PR. Formatting is
+not enforced in CI, but running `ruff format` keeps diffs clean.
 
 ## Adding a New Tool
 
