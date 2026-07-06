@@ -166,6 +166,45 @@ class TestPathTraversal:
         mock_req.assert_called_once()
 
 
+class TestResponseVolumeBounds:
+    def test_campaign_html_truncated_with_note(self, monkeypatch, mock_mc_request) -> None:
+        monkeypatch.setattr(server, "MAX_CONTENT_CHARS", 100)
+        mock_mc_request({"plain_text": "short", "html": "x" * 5000})
+        payload = json.loads(server.get_campaign_content(campaign_id="c1", include_html=True))
+        assert len(payload["html"]) == 100
+        assert "truncated" in payload
+        assert "html (5000 chars)" in payload["truncated"]
+        assert "plain_text" not in payload["truncated"]  # short field untouched
+
+    def test_no_note_when_under_cap(self, monkeypatch, mock_mc_request) -> None:
+        monkeypatch.setattr(server, "MAX_CONTENT_CHARS", 100000)
+        mock_mc_request({"plain_text": "hello", "html": "<p>hi</p>"})
+        payload = json.loads(server.get_campaign_content(campaign_id="c1", include_html=True))
+        assert "truncated" not in payload
+        assert payload["html"] == "<p>hi</p>"
+
+    def test_cap_disabled_when_zero(self, monkeypatch, mock_mc_request) -> None:
+        monkeypatch.setattr(server, "MAX_CONTENT_CHARS", 0)
+        mock_mc_request({"plain_text": "p", "html": "y" * 300000})
+        payload = json.loads(server.get_campaign_content(campaign_id="c1", include_html=True))
+        assert len(payload["html"]) == 300000
+        assert "truncated" not in payload
+
+
+class TestBatchRiskTier:
+    def test_create_batch_is_destructive(self) -> None:
+        assert server.TOOL_RISK["create_batch"] == "destructive"
+
+    def test_describe_tools_marks_create_batch_destructive(self) -> None:
+        by_name = {t["name"]: t for t in json.loads(server.describe_tools())["tools"]}
+        assert by_name["create_batch"]["risk"] == "destructive"
+        assert by_name["create_batch"]["destructive"] is True
+
+    def test_batch_subscribe_stays_write(self) -> None:
+        # add/update only, no permanent deletion -> still a plain write, not destructive.
+        assert server.TOOL_RISK["batch_subscribe"] == "write"
+
+
 class TestMetadataTruthfulness:
     """Docstrings must not contradict the machine-readable risk/idempotency signals."""
 

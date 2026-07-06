@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `idempotent` hint (MCP annotation and `describe_tools`) now agrees with the docstrings for
   `update_member`, `tag_member`, `update_segment`, and `publish_landing_page`, which state they
   are idempotent but were previously reported otherwise.
+- `create_batch` is now classified `destructive` instead of `write`: a batch can wrap arbitrary
+  DELETE operations, so a runtime-security gateway should treat it with the same caution as a
+  delete rather than wave it through. `batch_subscribe` (add/update only) stays `write`.
 - Malformed JSON passed to `batch_subscribe`, `create_segment`, `update_segment`, or
   `create_batch` returns a readable error instead of raising an unhandled exception.
 - Path parameters containing `..` are rejected before dispatch, closing an endpoint-traversal
@@ -31,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same permanent-deletion endpoint and are equivalent.
 
 ### Added
+- **Response size cap** — a campaign's HTML/plain-text body is capped before it reaches the model
+  so one large template can't blow the context window. Configurable via
+  `MAILCHIMP_MAX_CONTENT_CHARS` (default 100000; `0` disables). When a body is trimmed, the
+  response carries a `truncated` note listing the affected parts. Listings are unaffected; they
+  are already bounded by their `count` parameter.
 - **Tool profiles** — `MAILCHIMP_TOOLS` selects which tools to expose, to shrink the tool-list
   payload sent to the model on every turn. Accepts a comma-separated mix of risk tiers
   (`read` / `write` / `destructive`) and/or exact tool names; unset or `all` exposes everything.
