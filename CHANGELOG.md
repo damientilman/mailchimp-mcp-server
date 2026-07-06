@@ -8,8 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Every write and destructive tool now surfaces the API error instead of reporting a hard-coded
+  success. Around 20 tools — including `send_campaign`, `send_test_email`, `schedule_campaign`,
+  `cancel_send`, `delete_campaign`, `pause_automation`, and the `delete_*` family — previously
+  discarded the API result and always returned success, so a rejected send was reported as
+  `sent` and a failed delete as `deleted`. The error each docstring promised is now actually
+  returned.
 - `delete_member` and `tag_member` now surface the API error instead of always reporting
   success — a failed GDPR deletion no longer returns a false `permanently_deleted` confirmation.
+- `tag_member` no longer documents "read scope required": it is a write, and the note is dropped
+  to match the other tools.
+- The `idempotent` hint (MCP annotation and `describe_tools`) now agrees with the docstrings for
+  `update_member`, `tag_member`, `update_segment`, and `publish_landing_page`, which state they
+  are idempotent but were previously reported otherwise.
 - Malformed JSON passed to `batch_subscribe`, `create_segment`, `update_segment`, or
   `create_batch` returns a readable error instead of raising an unhandled exception.
 - Path parameters containing `..` are rejected before dispatch, closing an endpoint-traversal

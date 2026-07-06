@@ -1055,7 +1055,9 @@ def delete_template(template_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="delete template", template_id=template_id, account=account)):
         return guard
-    mc_request(f"/templates/{template_id}", method="DELETE", account=account)
+    data = mc_request(f"/templates/{template_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "template_id": template_id}, indent=2)
 
 
@@ -1262,8 +1264,8 @@ def tag_member(list_id: str, email_address: str, tags_to_add: Optional[str] = No
     tag/segment, add_member with tags param for tagging at signup, update_member for profile/status
     changes, get_member_tags to check current tags.
 
-    Authenticated via API key (read scope required). Max 10 concurrent requests. Respects
-    read-only and dry-run modes. Returns 404 error if the member does not exist.
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+    Returns 404 error if the member does not exist.
 
     Args:
         list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
@@ -1690,7 +1692,9 @@ def schedule_campaign(campaign_id: str, schedule_time: str, account: str | None 
     """
     if (guard := _guard_write(action="schedule campaign", campaign_id=campaign_id, schedule_time=schedule_time, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}/actions/schedule", body={"schedule_time": schedule_time}, method="POST", account=account)
+    data = mc_request(f"/campaigns/{campaign_id}/actions/schedule", body={"schedule_time": schedule_time}, method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "scheduled", "campaign_id": campaign_id, "schedule_time": schedule_time}, indent=2)
 
 
@@ -1718,7 +1722,9 @@ def unschedule_campaign(campaign_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="unschedule campaign", campaign_id=campaign_id, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}/actions/unschedule", method="POST", account=account)
+    data = mc_request(f"/campaigns/{campaign_id}/actions/unschedule", method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "unscheduled", "campaign_id": campaign_id}, indent=2)
 
 
@@ -1779,7 +1785,9 @@ def delete_campaign(campaign_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="delete campaign", campaign_id=campaign_id, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}", method="DELETE", account=account)
+    data = mc_request(f"/campaigns/{campaign_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "campaign_id": campaign_id}, indent=2)
 
 
@@ -1808,7 +1816,9 @@ def send_campaign(campaign_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="send campaign", campaign_id=campaign_id, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}/actions/send", method="POST", account=account)
+    data = mc_request(f"/campaigns/{campaign_id}/actions/send", method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "sent", "campaign_id": campaign_id}, indent=2)
 
 
@@ -1835,7 +1845,9 @@ def send_test_email(campaign_id: str, test_emails: str, send_type: str = "html",
         return guard
     email_list = [e.strip() for e in test_emails.split(",")]
     body = {"test_emails": email_list, "send_type": send_type}
-    mc_request(f"/campaigns/{campaign_id}/actions/test", body=body, method="POST", account=account)
+    data = mc_request(f"/campaigns/{campaign_id}/actions/test", body=body, method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "test_sent", "campaign_id": campaign_id, "test_emails": email_list}, indent=2)
 
 
@@ -1857,7 +1869,9 @@ def cancel_send(campaign_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="cancel campaign send", campaign_id=campaign_id, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}/actions/cancel-send", method="POST", account=account)
+    data = mc_request(f"/campaigns/{campaign_id}/actions/cancel-send", method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "cancelled", "campaign_id": campaign_id}, indent=2)
 
 
@@ -1925,7 +1939,9 @@ def delete_segment(list_id: str, segment_id: str, account: str | None = None) ->
     """
     if (guard := _guard_write(action="delete segment", list_id=list_id, segment_id=segment_id, account=account)):
         return guard
-    mc_request(f"/lists/{list_id}/segments/{segment_id}", method="DELETE", account=account)
+    data = mc_request(f"/lists/{list_id}/segments/{segment_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "segment_id": segment_id}, indent=2)
 
 
@@ -2273,7 +2289,9 @@ def delete_merge_field(list_id: str, merge_id: str, account: str | None = None) 
     """
     if (guard := _guard_write(action="delete merge field", list_id=list_id, merge_id=merge_id, account=account)):
         return guard
-    mc_request(f"/lists/{list_id}/merge-fields/{merge_id}", method="DELETE", account=account)
+    data = mc_request(f"/lists/{list_id}/merge-fields/{merge_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "merge_id": merge_id}, indent=2)
 
 
@@ -2442,7 +2460,9 @@ def delete_interest_category(list_id: str, category_id: str, account: str | None
     """
     if (guard := _guard_write(action="delete interest category", list_id=list_id, category_id=category_id, account=account)):
         return guard
-    mc_request(f"/lists/{list_id}/interest-categories/{category_id}", method="DELETE", account=account)
+    data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "category_id": category_id}, indent=2)
 
 
@@ -2470,7 +2490,9 @@ def delete_interest(list_id: str, category_id: str, interest_id: str, account: s
     """
     if (guard := _guard_write(action="delete interest", list_id=list_id, category_id=category_id, interest_id=interest_id, account=account)):
         return guard
-    mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests/{interest_id}", method="DELETE", account=account)
+    data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests/{interest_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "interest_id": interest_id}, indent=2)
 
 
@@ -2567,7 +2589,9 @@ def delete_webhook(list_id: str, webhook_id: str, account: str | None = None) ->
     """
     if (guard := _guard_write(action="delete webhook", list_id=list_id, webhook_id=webhook_id, account=account)):
         return guard
-    mc_request(f"/lists/{list_id}/webhooks/{webhook_id}", method="DELETE", account=account)
+    data = mc_request(f"/lists/{list_id}/webhooks/{webhook_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "webhook_id": webhook_id}, indent=2)
 
 
@@ -3288,7 +3312,9 @@ def pause_automation(automation_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="pause automation", automation_id=automation_id, account=account)):
         return guard
-    mc_request(f"/automations/{automation_id}/actions/pause-all-emails", method="POST", account=account)
+    data = mc_request(f"/automations/{automation_id}/actions/pause-all-emails", method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "paused", "automation_id": automation_id}, indent=2)
 
 
@@ -3314,7 +3340,9 @@ def start_automation(automation_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="start automation", automation_id=automation_id, account=account)):
         return guard
-    mc_request(f"/automations/{automation_id}/actions/start-all-emails", method="POST", account=account)
+    data = mc_request(f"/automations/{automation_id}/actions/start-all-emails", method="POST", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "started", "automation_id": automation_id}, indent=2)
 
 
@@ -4703,12 +4731,14 @@ def trigger_customer_journey(journey_id: str, step_id: str, email_address: str, 
     """
     if (guard := _guard_write(action="trigger customer journey", journey_id=journey_id, step_id=step_id, email_address=email_address, account=account)):
         return guard
-    mc_request(
+    data = mc_request(
         f"/customer-journeys/journeys/{journey_id}/steps/{step_id}/actions/trigger",
         body={"email_address": email_address},
         method="POST",
         account=account,
     )
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "triggered", "journey_id": journey_id, "step_id": step_id, "email_address": email_address}, indent=2)
 
 
@@ -5142,7 +5172,9 @@ def delete_verified_domain(domain_name: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="delete verified domain", domain_name=domain_name, account=account)):
         return guard
-    mc_request(f"/verified-domains/{domain_name}", method="DELETE", account=account)
+    data = mc_request(f"/verified-domains/{domain_name}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "domain_name": domain_name}, indent=2)
 
 
@@ -5231,7 +5263,9 @@ def delete_connected_site(connected_site_id: str, account: str | None = None) ->
     """
     if (guard := _guard_write(action="delete connected site", connected_site_id=connected_site_id, account=account)):
         return guard
-    mc_request(f"/connected-sites/{connected_site_id}", method="DELETE", account=account)
+    data = mc_request(f"/connected-sites/{connected_site_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "connected_site_id": connected_site_id}, indent=2)
 
 
@@ -5471,7 +5505,9 @@ def delete_campaign_folder(folder_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="delete campaign folder", folder_id=folder_id, account=account)):
         return guard
-    mc_request(f"/campaign-folders/{folder_id}", method="DELETE", account=account)
+    data = mc_request(f"/campaign-folders/{folder_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "folder_id": folder_id}, indent=2)
 
 
@@ -5581,7 +5617,9 @@ def delete_template_folder(folder_id: str, account: str | None = None) -> str:
     """
     if (guard := _guard_write(action="delete template folder", folder_id=folder_id, account=account)):
         return guard
-    mc_request(f"/template-folders/{folder_id}", method="DELETE", account=account)
+    data = mc_request(f"/template-folders/{folder_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "folder_id": folder_id}, indent=2)
 
 
@@ -5724,7 +5762,9 @@ def delete_campaign_feedback(campaign_id: str, feedback_id: str, account: str | 
     """
     if (guard := _guard_write(action="delete campaign feedback", campaign_id=campaign_id, feedback_id=feedback_id, account=account)):
         return guard
-    mc_request(f"/campaigns/{campaign_id}/feedback/{feedback_id}", method="DELETE", account=account)
+    data = mc_request(f"/campaigns/{campaign_id}/feedback/{feedback_id}", method="DELETE", account=account)
+    if isinstance(data, dict) and "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({"status": "deleted", "campaign_id": campaign_id, "feedback_id": feedback_id}, indent=2)
 
 
@@ -7408,6 +7448,11 @@ def list_account_orders(count: int = 10, offset: int = 0, account: str | None = 
 # risk tier: irreversible data loss or an irreversible outbound send with wide blast radius.
 _DESTRUCTIVE_SEND = frozenset({"send_campaign", "resend_to_non_openers"})
 
+# Writes that are safe to repeat but whose names carry no delete_/upsert_ prefix, so the derived
+# rule below cannot infer them. Kept explicit (like _DESTRUCTIVE_SEND) so the idempotent hint
+# matches what each tool's docstring already states.
+_IDEMPOTENT_WRITES = frozenset({"update_member", "tag_member", "update_segment", "publish_landing_page"})
+
 
 def _classify_risk(name: str, fn) -> str:
     """Classify a tool as 'read', 'write', or 'destructive'.
@@ -7426,8 +7471,9 @@ def _classify_risk(name: str, fn) -> str:
 
 
 def _idempotent(name: str) -> bool:
-    """Deletes and PUT-based upserts are safe to repeat; other writes are not asserted idempotent."""
-    return name.startswith("delete_") or name.startswith("upsert_")
+    """Deletes, PUT-based upserts, and the explicitly-listed re-appliable updates are safe to
+    repeat; other writes are not asserted idempotent."""
+    return name.startswith("delete_") or name.startswith("upsert_") or name in _IDEMPOTENT_WRITES
 
 
 @mcp.tool()
