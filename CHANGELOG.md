@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-06
+
 ### Fixed
 - Every write and destructive tool now surfaces the API error instead of reporting a hard-coded
   success. Around 20 tools — including `send_campaign`, `send_test_email`, `schedule_campaign`,
