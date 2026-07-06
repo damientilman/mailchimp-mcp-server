@@ -6,6 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io)
+[![Docker](https://img.shields.io/badge/ghcr.io-mailchimp--mcp--server-blue?logo=docker)](https://github.com/damientilman/mailchimp-mcp-server/pkgs/container/mailchimp-mcp-server)
 
 The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/): **227 tools** to query and manage your Mailchimp account from any MCP-compatible client. It covers the full campaign, audience, member, segment, automation and reporting surface, complete e-commerce (read and write), landing pages, File Manager, surveys, signup forms and verified domains, plus multi-account support and runtime-security guardrails (read-only, dry-run and audit modes, with per-tool risk metadata).
 
@@ -43,6 +44,31 @@ Add it to your MCP client (Claude Desktop, Cursor, Cline, …):
 ```
 
 Tip: start with `MAILCHIMP_READ_ONLY=true` to explore safely, then flip it off when you are ready to write. See [Configuration](#configuration) for all options.
+
+### Docker
+
+A prebuilt image is published to the GitHub Container Registry on every release:
+
+```bash
+docker run --rm -i -e MAILCHIMP_API_KEY=your-key-us8 ghcr.io/damientilman/mailchimp-mcp-server:latest
+```
+
+Or point your MCP client at it:
+
+```json
+{
+  "mcpServers": {
+    "mailchimp": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "-e", "MAILCHIMP_API_KEY", "-e", "MAILCHIMP_READ_ONLY", "ghcr.io/damientilman/mailchimp-mcp-server:latest"],
+      "env": {
+        "MAILCHIMP_API_KEY": "your-key-us8",
+        "MAILCHIMP_READ_ONLY": "true"
+      }
+    }
+  }
+}
+```
 
 ## Features
 

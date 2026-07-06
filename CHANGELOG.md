@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same permanent-deletion endpoint and are equivalent.
 
 ### Added
+- **Docker image** — a prebuilt image is published to the GitHub Container Registry
+  (`ghcr.io/damientilman/mailchimp-mcp-server`) on every release, for running the server without
+  a local Python or uv install. README documents both the `docker run` and MCP-client setups.
 - **Response size cap** — a campaign's HTML/plain-text body is capped before it reaches the model
   so one large template can't blow the context window. Configurable via
   `MAILCHIMP_MAX_CONTENT_CHARS` (default 100000; `0` disables). When a body is trimmed, the
