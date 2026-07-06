@@ -44,6 +44,14 @@ except ValueError:
 _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 _BACKOFF_BASE = 1.0  # seconds; attempt N waits _BACKOFF_BASE * 2**N -> 1s, 2s, 4s
 
+# Cap on unbounded body copy (a campaign's HTML/plain text) returned to the model, so one email
+# template can't blow the context window. Configurable via MAILCHIMP_MAX_CONTENT_CHARS; 0 disables
+# the cap. Listings are not capped here -- they are already bounded by their count parameter.
+try:
+    MAX_CONTENT_CHARS = max(0, int(os.environ.get("MAILCHIMP_MAX_CONTENT_CHARS", "100000")))
+except ValueError:
+    MAX_CONTENT_CHARS = 100000
+
 DEFAULT_ACCOUNT = "default"
 
 # Machine-readable risk tier per tool name ('read' | 'write' | 'destructive'), populated at
@@ -230,6 +238,15 @@ def _subscriber_hash(email_address: str) -> Optional[str]:
     if not email_address or not _EMAIL_RE.match(email_address.strip()):
         return None
     return hashlib.md5(email_address.strip().lower().encode()).hexdigest()
+
+
+def _cap(text: str) -> tuple[str, bool, int]:
+    """Truncate long body copy to MAX_CONTENT_CHARS so one field can't blow the context window.
+    Returns (possibly-truncated text, was_truncated, original length)."""
+    length = len(text or "")
+    if not text or MAX_CONTENT_CHARS <= 0 or length <= MAX_CONTENT_CHARS:
+        return text, False, length
+    return text[:MAX_CONTENT_CHARS], True, length
 
 
 def _session_for(name: str) -> requests.Session:
@@ -533,7 +550,9 @@ def get_campaign_content(campaign_id: str, include_html: bool = False, account: 
         JSON with campaign_id and plain_text (the plain-text body); html is added only when
         include_html=True. For A/B (variate) campaigns, a variations array is included with one
         entry per content variation: {label, plain_text, and html when include_html=True}.
-        Returns error if the campaign_id is invalid or the campaign has no content.
+        Very long bodies are capped (see MAILCHIMP_MAX_CONTENT_CHARS); when that happens a
+        truncated field names the affected parts. Returns error if the campaign_id is invalid or
+        the campaign has no content.
 
     Example:
         get_campaign_content(campaign_id="abc123def4") -> {"campaign_id": "abc123def4", "plain_text": "Hi *|FNAME|* ..."}
@@ -542,23 +561,37 @@ def get_campaign_content(campaign_id: str, include_html: bool = False, account: 
     if "error" in data:
         return json.dumps(data, indent=2)
 
+    truncated: list[str] = []
+
+    def _field(text: str, label: str) -> str:
+        capped, was_truncated, length = _cap(text)
+        if was_truncated:
+            truncated.append(f"{label} ({length} chars)")
+        return capped
+
     result = {
         "campaign_id": campaign_id,
-        "plain_text": data.get("plain_text", ""),
+        "plain_text": _field(data.get("plain_text", ""), "plain_text"),
     }
     if include_html:
-        result["html"] = data.get("html", "")
+        result["html"] = _field(data.get("html", ""), "html")
 
     variations = data.get("variate_contents")
     if variations:
         result["variations"] = [
             {
                 "label": variation.get("content_label", ""),
-                "plain_text": variation.get("plain_text", ""),
-                **({"html": variation.get("html", "")} if include_html else {}),
+                "plain_text": _field(variation.get("plain_text", ""), f"variation '{variation.get('content_label', '')}' plain_text"),
+                **({"html": _field(variation.get("html", ""), f"variation '{variation.get('content_label', '')}' html")} if include_html else {}),
             }
             for variation in variations
         ]
+
+    if truncated:
+        result["truncated"] = (
+            f"Truncated to {MAX_CONTENT_CHARS} chars: {', '.join(truncated)}. "
+            "Raise MAILCHIMP_MAX_CONTENT_CHARS to return more."
+        )
 
     return json.dumps(result, indent=2)
 
@@ -4463,8 +4496,9 @@ def create_batch(operations: str, account: str | None = None) -> str:
     """Submit multiple API operations as a single asynchronous batch request.
 
     Use for bulk operations exceeding other tool limits (e.g. batch_subscribe max 500). Operations
-    run asynchronously; poll with get_batch_status. Each operation runs independently. Can include
-    destructive operations (DELETE, POST).
+    run asynchronously; poll with get_batch_status. Each operation runs independently. Because a
+    batch can wrap arbitrary DELETEs, this tool is classified destructive so a gateway treats it
+    with the same caution as a delete.
 
     Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
 
@@ -7448,6 +7482,11 @@ def list_account_orders(count: int = 10, offset: int = 0, account: str | None = 
 # risk tier: irreversible data loss or an irreversible outbound send with wide blast radius.
 _DESTRUCTIVE_SEND = frozenset({"send_campaign", "resend_to_non_openers"})
 
+# Tools whose blast radius is destructive even without a delete_ prefix: create_batch wraps
+# arbitrary operations, including DELETEs, in one call, so a gateway must treat it as destructive
+# rather than wave it through as a plain write.
+_DESTRUCTIVE_BATCH = frozenset({"create_batch"})
+
 # Writes that are safe to repeat but whose names carry no delete_/upsert_ prefix, so the derived
 # rule below cannot infer them. Kept explicit (like _DESTRUCTIVE_SEND) so the idempotent hint
 # matches what each tool's docstring already states.
@@ -7458,12 +7497,13 @@ def _classify_risk(name: str, fn) -> str:
     """Classify a tool as 'read', 'write', or 'destructive'.
 
     Destructive = irreversible data loss (any delete_* tool, including the GDPR permanent
-    erase) or an irreversible real send. Write = any other tool that routes through the
-    _guard_write chokepoint (detected structurally via the function's referenced globals).
+    erase), an irreversible real send, or create_batch (which can wrap arbitrary DELETEs).
+    Write = any other tool that routes through the _guard_write chokepoint (detected
+    structurally via the function's referenced globals).
     Read = everything else. The write/read split is derived, not hand-maintained, so it
     cannot drift; only the destructive set needs human judgement.
     """
-    if name.startswith("delete_") or name in _DESTRUCTIVE_SEND:
+    if name.startswith("delete_") or name in _DESTRUCTIVE_SEND or name in _DESTRUCTIVE_BATCH:
         return "destructive"
     if "_guard_write" in fn.__code__.co_names:
         return "write"
