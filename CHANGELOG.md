@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Docker build now copies `README.md`, which `pyproject.toml` references, so the image builds
+  instead of failing metadata generation. The PyPI publish also skips already-published versions
+  on re-run rather than erroring.
+
 ## [1.1.0] - 2026-07-06
 
 ### Fixed
