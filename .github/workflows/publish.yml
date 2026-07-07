@@ -66,3 +66,5 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true  # a re-run for an already-published version is a no-op, not a failure
