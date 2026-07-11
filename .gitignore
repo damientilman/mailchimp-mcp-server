@@ -18,6 +18,9 @@ htmlcov/
 .mypy_cache/
 uv.lock
 
-# Local working notes (plans, growth drafts) - never publish
+# Local working notes and agent config - never publish
 tasks/
+CLAUDE.md
+.claude/
+.conductor/
 .DS_Store
