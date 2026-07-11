@@ -60,6 +60,14 @@ class TestAudiences:
                             "open_rate": 0.4,
                             "click_rate": 0.05,
                         },
+                        "campaign_defaults": {
+                            "from_name": "Acme",
+                            "from_email": "hello@acme.com",
+                            "subject": "",
+                            "language": "en",
+                        },
+                        "double_optin": True,
+                        "marketing_permissions": False,
                     },
                 ],
             }
@@ -68,6 +76,33 @@ class TestAudiences:
         assert payload["total_items"] == 2
         assert payload["audiences"][0]["id"] == "list_a"
         assert payload["audiences"][0]["member_count"] == 100
+        assert payload["audiences"][0]["campaign_defaults"]["from_name"] == "Acme"
+        assert payload["audiences"][0]["double_optin"] is True
+        assert payload["audiences"][0]["marketing_permissions"] is False
+
+    def test_list_audiences_settings_default_to_none_when_absent(self, mock_mc_request) -> None:
+        mock_mc_request(
+            {
+                "total_items": 1,
+                "lists": [
+                    {
+                        "id": "list_b",
+                        "name": "Legacy",
+                        "date_created": "2024-01-01T00:00:00Z",
+                        "stats": {
+                            "member_count": 10,
+                            "unsubscribe_count": 0,
+                            "open_rate": 0.0,
+                            "click_rate": 0.0,
+                        },
+                    },
+                ],
+            }
+        )
+        payload = _parse(server.list_audiences())
+        assert payload["audiences"][0]["campaign_defaults"] is None
+        assert payload["audiences"][0]["double_optin"] is None
+        assert payload["audiences"][0]["marketing_permissions"] is None
 
     def test_get_audience_details(self, mock_mc_request) -> None:
         mock_mc_request(

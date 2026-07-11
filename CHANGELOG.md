@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-11
+
+### Added
+- `get_audience_details` now returns audience settings alongside the stats: `campaign_defaults`
+  (default `from_name` / `from_email` / `subject` / `language`), `double_optin` (single vs
+  confirmed/double opt-in), `marketing_permissions` (GDPR permission fields enabled), and
+  `email_type_option`. Surfaces list-level opt-in and compliance configuration the tool
+  previously trimmed out — useful for audience/hygiene audits.
+- `list_audiences` now returns `campaign_defaults`, `double_optin`, and `marketing_permissions`
+  for every audience. The `/lists` endpoint already carries each list's full object, so opt-in
+  mode, GDPR flag, and default sender for all audiences now come in a single call rather than one
+  `get_audience_details` per list.
+
 ### Fixed
 - Docker build now copies `README.md`, which `pyproject.toml` references, so the image builds
   instead of failing metadata generation. The PyPI publish also skips already-published versions

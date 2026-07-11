@@ -350,7 +350,7 @@ Replace `mcp-cli` with your client's binary name. For read-only mode, add
 
 | Tool | Description |
 |---|---|
-| `list_audiences` | List all audiences with stats |
+| `list_audiences` | List all audiences with stats, opt-in mode, GDPR flag, and sender defaults |
 | `get_audience_details` | Get detailed info for a specific audience |
 | `list_audience_members` | List members with optional status filter |
 | `search_members` | Search members by email or name |

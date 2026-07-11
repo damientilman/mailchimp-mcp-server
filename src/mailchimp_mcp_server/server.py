@@ -396,7 +396,12 @@ def list_audiences(count: int = 10, offset: int = 0, account: str | None = None)
 
     Returns:
         JSON with total_items and audiences array. Each: id (use as list_id), name, member_count,
-        unsubscribe_count, open_rate (0-1), click_rate (0-1), date_created.
+        unsubscribe_count, open_rate (0-1), click_rate (0-1), date_created, and the audience settings
+        carried in the same list payload: campaign_defaults (default from_name, from_email, subject,
+        language), double_optin (bool: true = confirmed/double opt-in), marketing_permissions (bool:
+        GDPR permission fields enabled). These settings come free with this call -- the /lists endpoint
+        returns each list's full object -- so all audiences and their opt-in/sender/compliance config
+        are available in one request, without a get_audience_details call per audience.
     """
     data = mc_request("/lists", params={"count": count, "offset": offset}, account=account)
     audiences = []
@@ -409,6 +414,9 @@ def list_audiences(count: int = 10, offset: int = 0, account: str | None = None)
             "open_rate": lst["stats"]["open_rate"],
             "click_rate": lst["stats"]["click_rate"],
             "date_created": lst["date_created"],
+            "campaign_defaults": lst.get("campaign_defaults"),
+            "double_optin": lst.get("double_optin"),
+            "marketing_permissions": lst.get("marketing_permissions"),
         })
     return json.dumps({"total_items": data.get("total_items"), "audiences": audiences}, indent=2)
 
@@ -429,7 +437,10 @@ def get_audience_details(list_id: str, account: str | None = None) -> str:
 
     Returns:
         JSON with id, name, stats (member_count, unsubscribe_count, open_rate, click_rate),
-        date_created, list_rating (0-5), subscribe_url_short.
+        date_created, list_rating (0-5), subscribe_url_short, and audience settings:
+        campaign_defaults (from_name, from_email, subject, language), double_optin (bool:
+        true = confirmed/double opt-in), marketing_permissions (bool: GDPR permission fields
+        enabled), email_type_option (bool).
     """
     data = mc_request(f"/lists/{list_id}", account=account)
     return json.dumps({
@@ -439,6 +450,10 @@ def get_audience_details(list_id: str, account: str | None = None) -> str:
         "date_created": data.get("date_created"),
         "list_rating": data.get("list_rating"),
         "subscribe_url_short": data.get("subscribe_url_short"),
+        "campaign_defaults": data.get("campaign_defaults"),
+        "double_optin": data.get("double_optin"),
+        "marketing_permissions": data.get("marketing_permissions"),
+        "email_type_option": data.get("email_type_option"),
     }, indent=2)
 
 
