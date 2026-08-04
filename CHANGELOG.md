@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Server failed to start against `mcp` 2.x.** `mcp` 2.0 restructured the package: the
+  high-level server class moved from `mcp.server.fastmcp.FastMCP` to
+  `mcp.server.mcpserver.MCPServer`, so `server.py`'s `from mcp.server.fastmcp import FastMCP`
+  died at import with `ModuleNotFoundError`. Because the dependency was declared with no upper
+  bound, resolvers picked 2.0 and existing installs broke with no local change — and under an
+  MCP client it surfaced only as a server that silently never connected, easily mistaken for
+  bad credentials. `server.py` now imports `MCPServer` from the 2.x path with a fallback to the
+  1.x `FastMCP`, so it runs on both; the dependency is bounded `mcp[cli]>=1.0.0,<3`.
+
+### Changed
+- Migrated to the `mcp` 2.x high-level server API (`MCPServer`) while keeping 1.x support. The
+  internal tool registry, risk annotations, and tool-profile filtering are unchanged; the
+  `ToolAnnotations` risk hints (`readOnlyHint` / `destructiveHint` / `idempotentHint`) still ship
+  over `tools/list` on both versions, verified against `mcp` 1.29 and 2.0.
+
 ## [1.2.0] - 2026-07-11
 
 ### Added

@@ -8,7 +8,16 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import requests
-from mcp.server.fastmcp import FastMCP
+
+# mcp 2.0 renamed the high-level server class (FastMCP -> MCPServer) and moved it from
+# mcp.server.fastmcp to mcp.server.mcpserver. Import from the new location, falling back to
+# the old one so the server runs on both mcp 1.x and 2.x. The internal tool registry
+# (mcp._tool_manager) and ToolAnnotations are identical across the two, so the rest of this
+# module stays version-agnostic.
+try:
+    from mcp.server.mcpserver import MCPServer  # mcp >= 2.0
+except ImportError:  # mcp < 2.0
+    from mcp.server.fastmcp import FastMCP as MCPServer
 
 try:
     from mcp.types import ToolAnnotations
@@ -105,7 +114,7 @@ def _load_accounts() -> dict:
 
 MAILCHIMP_ACCOUNTS = _load_accounts()
 
-mcp = FastMCP("mailchimp-mcp-server")
+mcp = MCPServer("mailchimp-mcp-server")
 
 
 # --- Helpers ---
@@ -7569,7 +7578,7 @@ def describe_tools() -> str:
 def _apply_tool_annotations() -> None:
     """Populate TOOL_RISK and attach MCP-standard risk annotations to every registered tool.
 
-    Runs once at import, after all tools are registered. Reads the FastMCP tool registry so the
+    Runs once at import, after all tools are registered. Reads the server's tool registry so the
     risk metadata (readOnlyHint / destructiveHint / idempotentHint) travels through the MCP
     protocol's tools/list, letting a gateway enforce policy on the destructive signal directly.
     """

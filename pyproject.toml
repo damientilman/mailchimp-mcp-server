@@ -25,7 +25,11 @@ classifiers = [
     "Topic :: Communications :: Email",
 ]
 dependencies = [
-    "mcp[cli]>=1.0.0",
+    # Supports mcp 1.x and 2.x: server.py imports the high-level server class from
+    # mcp.server.mcpserver (2.x) with a fallback to mcp.server.fastmcp (1.x). The <3 bound is
+    # load-bearing — mcp 2.0 already removed mcp.server.fastmcp under an unbounded range, so a
+    # future major could break imports the same way; revisit it deliberately, don't tidy it away.
+    "mcp[cli]>=1.0.0,<3",
     "requests>=2.28.0",
 ]
 
