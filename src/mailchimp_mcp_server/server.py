@@ -32,6 +32,28 @@ AUDIT_LOG = os.environ.get("MAILCHIMP_AUDIT_LOG", "").lower() in ("1", "true", "
 # tiers (read / write / destructive) and/or exact tool names. See _selected_tool_names.
 TOOLS_PROFILE = os.environ.get("MAILCHIMP_TOOLS", "").strip()
 
+# --- Transport ---
+# stdio (the default) runs the server as a subprocess of the MCP client, which is what every
+# desktop client expects and needs no network configuration. MAILCHIMP_TRANSPORT switches to a
+# long-lived network server for remote/shared deployments: 'streamable-http' (the current MCP
+# HTTP transport) or 'sse' (its deprecated predecessor, kept for older clients).
+#
+# The network transports bind to loopback by default and ship NO authentication -- the single
+# MAILCHIMP_API_KEY is shared by every client that can reach the port. Only bind a routable
+# interface behind an authenticating proxy or gateway. See _warn_unauthenticated.
+TRANSPORT = os.environ.get("MAILCHIMP_TRANSPORT", "").strip()
+HOST = os.environ.get("MAILCHIMP_HOST", "").strip() or "127.0.0.1"
+try:
+    PORT = int(os.environ.get("MAILCHIMP_PORT", "8000"))
+except ValueError:
+    PORT = 8000
+# Comma-separated Host / Origin allow-lists for the DNS-rebinding protection the MCP SDK applies
+# to HTTP transports. Empty keeps the SDK's own defaults (loopback host/origin only), which is
+# what a local or proxied deployment wants; set them when the server is reached by its own
+# hostname. A literal '*' disables the check -- last resort, and only behind a trusted proxy.
+ALLOWED_HOSTS = [h.strip() for h in os.environ.get("MAILCHIMP_ALLOWED_HOSTS", "").split(",") if h.strip()]
+ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("MAILCHIMP_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+
 # Transient HTTP failures are retried with exponential backoff. Mailchimp caps concurrency at
 # 10 and returns 429 (with a Retry-After header) when throttled; 5xx are typically upstream
 # blips. The count is configurable via MAILCHIMP_MAX_RETRIES (default 3, i.e. up to 4 attempts).
@@ -7649,8 +7671,102 @@ _optimize_descriptions()
 _apply_tool_profile()
 
 
+_NETWORK_TRANSPORTS = ("streamable-http", "sse")
+# Accepted MAILCHIMP_TRANSPORT spellings -> the SDK's canonical transport name. 'http' is an
+# alias for streamable-http because that is what most deployment docs call it.
+_TRANSPORT_ALIASES = {
+    "": "stdio",
+    "stdio": "stdio",
+    "http": "streamable-http",
+    "streamable-http": "streamable-http",
+    "streamable_http": "streamable-http",
+    "streamablehttp": "streamable-http",
+    "sse": "sse",
+}
+
+
+def _resolve_transport(spec: str) -> str:
+    """Normalize a MAILCHIMP_TRANSPORT value to an SDK transport name.
+
+    Raises ValueError on an unknown value rather than silently falling back to stdio: a typo in
+    a deployment's transport setting would otherwise start a server no client can reach.
+    """
+    key = (spec or "").strip().lower()
+    if key not in _TRANSPORT_ALIASES:
+        valid = "stdio, streamable-http, sse"
+        raise ValueError(f"Unknown MAILCHIMP_TRANSPORT '{spec}'. Valid values: {valid}.")
+    return _TRANSPORT_ALIASES[key]
+
+
+def _transport_security():
+    """Build TransportSecuritySettings from the allow-list env vars, or None to keep SDK defaults.
+
+    Returns None when the installed SDK predates transport_security (< 1.10.0) so an older
+    install still starts -- _require_network_support has already warned in that case.
+    """
+    if not ALLOWED_HOSTS and not ALLOWED_ORIGINS:
+        return None
+    try:
+        from mcp.server.transport_security import TransportSecuritySettings
+    except ImportError:  # pragma: no cover - SDK < 1.10.0
+        return None
+    if "*" in ALLOWED_HOSTS or "*" in ALLOWED_ORIGINS:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    return TransportSecuritySettings(allowed_hosts=ALLOWED_HOSTS, allowed_origins=ALLOWED_ORIGINS)
+
+
+def _require_network_support(transport: str) -> None:
+    """Fail fast with an actionable message when the installed SDK can't serve `transport`.
+
+    The package floor stays at mcp>=1.0.0 for stdio users; the HTTP transports need a newer SDK
+    (streamable-http from 1.8.0, DNS-rebinding protection from 1.10.0). Without this check an old
+    install dies inside the SDK with an opaque error.
+    """
+    try:
+        from mcp.server.transport_security import TransportSecuritySettings  # noqa: F401
+    except ImportError:  # pragma: no cover - depends on the installed SDK
+        raise SystemExit(
+            f"MAILCHIMP_TRANSPORT={transport} needs mcp>=1.10.0 (installed SDK is older). "
+            "Install the HTTP extra: pip install 'mailchimp-mcp[http]'"
+        ) from None
+
+
+def _warn_unauthenticated(transport: str, host: str, port: int) -> None:
+    """Print a startup banner spelling out what a network transport exposes.
+
+    This server has no authentication of its own: every client that can open the port acts as the
+    holder of MAILCHIMP_API_KEY, with whatever tools the profile exposes. That is fine behind an
+    authenticating gateway and dangerous on a routable interface, so say so at startup instead of
+    leaving it to the README.
+    """
+    destructive = sum(1 for risk in TOOL_RISK.values() if risk == "destructive")
+    lines = [
+        f"mailchimp-mcp-server: serving {transport} on http://{host}:{port}",
+        f"  {len(TOOL_RISK)} tools exposed ({destructive} destructive) with NO authentication --",
+        "  any client that can reach this port acts as the holder of MAILCHIMP_API_KEY.",
+    ]
+    if host not in ("127.0.0.1", "::1", "localhost"):
+        lines.append(f"  WARNING: bound to {host}, not loopback. Put an authenticating proxy in front of it.")
+    if not READ_ONLY:
+        lines.append("  Consider MAILCHIMP_READ_ONLY=true and/or MAILCHIMP_TOOLS=read to shrink the blast radius.")
+    if transport == "sse":
+        lines.append("  Note: 'sse' is deprecated in the MCP spec; prefer MAILCHIMP_TRANSPORT=streamable-http.")
+    print("\n".join(lines), file=sys.stderr, flush=True)
+
+
 def main():
-    mcp.run()
+    transport = _resolve_transport(TRANSPORT)
+    if transport not in _NETWORK_TRANSPORTS:
+        mcp.run()
+        return
+    _require_network_support(transport)
+    mcp.settings.host = HOST
+    mcp.settings.port = PORT
+    security = _transport_security()
+    if security is not None:
+        mcp.settings.transport_security = security
+    _warn_unauthenticated(transport, HOST, PORT)
+    mcp.run(transport=transport)
 
 
 if __name__ == "__main__":

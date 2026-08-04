@@ -32,7 +32,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The base floor stays at mcp>=1.0.0 so stdio installs are unaffected. The HTTP transports need
+# a newer SDK: streamable-http landed in 1.8.0 and DNS-rebinding protection in 1.10.0. Starlette,
+# uvicorn and sse-starlette are already core mcp dependencies, so this only raises the floor.
+http = [
+    "mcp[cli]>=1.10.0,<2.0.0",
+]
 dev = [
+    "mcp[cli]>=1.10.0,<2.0.0",
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "ruff>=0.6",
