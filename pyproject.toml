@@ -25,7 +25,9 @@ classifiers = [
     "Topic :: Communications :: Email",
 ]
 dependencies = [
-    "mcp[cli]>=1.0.0",
+    # Capped below 2.0: the mcp 2.x SDK removed the `mcp.server.fastmcp` package this server is
+    # built on, so an uncapped resolve installs an SDK the package cannot import at all.
+    "mcp[cli]>=1.0.0,<2.0.0",
     "requests>=2.28.0",
 ]
 
