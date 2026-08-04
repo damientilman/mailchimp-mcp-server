@@ -161,6 +161,11 @@ pip install -e .
 | `MAILCHIMP_DRY_RUN_<NAME>` | No | Dry-run mode for a specific named account (default: `false`) |
 | `MAILCHIMP_AUDIT_LOG` | No | Set to `true` to emit a structured JSON audit event per tool dispatch to stderr (default: `false`). See [Runtime security](#runtime-security). |
 | `MAILCHIMP_TOOLS` | No | Expose only a subset of tools to shrink the model's tool-list footprint (default: all). See [Tool profiles](#tool-profiles). |
+| `MAILCHIMP_TRANSPORT` | No | `stdio` (default), `streamable-http`, or `sse`. See [Remote deployment](#remote-deployment-http--sse). |
+| `MAILCHIMP_HOST` | No | Bind address for the network transports (default: `127.0.0.1`). Use `0.0.0.0` in a container. |
+| `MAILCHIMP_PORT` | No | Bind port for the network transports (default: `8000`) |
+| `MAILCHIMP_ALLOWED_HOSTS` | No | Comma-separated `Host` header allow-list for DNS-rebinding protection (default: loopback only). `*` disables the check. |
+| `MAILCHIMP_ALLOWED_ORIGINS` | No | Comma-separated `Origin` header allow-list (default: loopback only) |
 
 The datacenter (`us8`, `us21`, etc.) is automatically extracted from each key.
 
@@ -182,6 +187,49 @@ The server is designed for defense-in-depth alongside an external MCP gateway: i
 **Structured audit log** — With `MAILCHIMP_AUDIT_LOG=true`, each dispatch emits one JSON event to stderr with the tool, its risk tier, the `destructive` flag, the target account, the outcome (`executed` / `blocked_read_only` / `dry_run`), and the inspected arguments. Bulky or sensitive values (e.g. base64 `file_data`) are redacted and response bodies are never logged, so the stream is a safe audit sink to tail centrally.
 
 **Argument-contract validation** — All writes funnel through a single `_guard_write` chokepoint, and every request is validated before dispatch (pagination `count` capped to 1–1000, missing path IDs rejected), so malformed calls fail fast and consistently instead of hitting the API.
+
+### Remote deployment (HTTP / SSE)
+
+By default the server speaks **stdio** — the MCP client launches it as a subprocess, which is what
+every desktop client expects. Set `MAILCHIMP_TRANSPORT` to run it instead as a long-lived network
+server that several clients connect to over HTTP:
+
+```bash
+MAILCHIMP_API_KEY=your-key-us8 \
+MAILCHIMP_TRANSPORT=streamable-http \
+MAILCHIMP_HOST=0.0.0.0 MAILCHIMP_PORT=8000 \
+mailchimp-mcp-server                       # endpoint: http://<host>:8000/mcp
+```
+
+| Value | Endpoint | Notes |
+|---|---|---|
+| `stdio` | — | Default. Local subprocess; no network configuration. |
+| `streamable-http` (alias `http`) | `/mcp` | The current MCP HTTP transport. **Use this for new deployments.** |
+| `sse` | `/sse` | Deprecated in the MCP spec (superseded by Streamable HTTP in 2025-03-26). For older clients only. |
+
+The HTTP transports need `mcp>=1.10.0` — install the extra: `pip install 'mailchimp-mcp[http]'`.
+In Docker, set `MAILCHIMP_HOST=0.0.0.0` (the loopback default is unreachable from outside the
+container) and publish port 8000:
+
+```bash
+docker run --rm -p 8000:8000 \
+  -e MAILCHIMP_API_KEY=your-key-us8 \
+  -e MAILCHIMP_TRANSPORT=streamable-http -e MAILCHIMP_HOST=0.0.0.0 \
+  -e MAILCHIMP_READ_ONLY=true \
+  ghcr.io/damientilman/mailchimp-mcp-server:latest
+```
+
+> **This server has no authentication of its own.** Every client that can reach the port acts as
+> the holder of `MAILCHIMP_API_KEY`, with whatever tools the profile exposes — including the
+> destructive ones. The server prints this at startup and binds loopback unless told otherwise.
+> **Terminate auth at a reverse proxy or MCP gateway in front of it**; do not expose the port
+> directly. `MAILCHIMP_READ_ONLY=true` and `MAILCHIMP_TOOLS=read` shrink the blast radius but are
+> not access control.
+
+**DNS-rebinding protection** — the SDK rejects requests whose `Host`/`Origin` headers aren't
+allow-listed (loopback by default), so a browser on a user's machine can't be tricked into driving
+your server. When clients reach it by hostname, list it: `MAILCHIMP_ALLOWED_HOSTS=mcp.internal:8000`.
+Setting `*` disables the check — last resort, and only behind a trusted proxy.
 
 ### Tool profiles
 

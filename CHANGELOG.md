@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **HTTP transports for remote deployment** — `MAILCHIMP_TRANSPORT` runs the server as a
+  long-lived network server instead of a stdio subprocess: `streamable-http` (the current MCP
+  HTTP transport, served at `/mcp`) or `sse` (its deprecated predecessor, at `/sse`, for older
+  clients). `stdio` remains the default, so existing installs are unaffected. Bind address and
+  port come from `MAILCHIMP_HOST` (default `127.0.0.1`) and `MAILCHIMP_PORT` (default `8000`).
+  An unrecognized transport value now aborts at startup rather than silently falling back to
+  stdio. Requires `mcp>=1.10.0`, available as the `http` extra.
+- **DNS-rebinding allow-lists for the HTTP transports** — `MAILCHIMP_ALLOWED_HOSTS` and
+  `MAILCHIMP_ALLOWED_ORIGINS` configure the SDK's `Host`/`Origin` checks (loopback-only by
+  default); `*` disables the check for deployments that terminate it upstream.
+- **Startup banner on the network transports** — states the endpoint, how many tools (and how
+  many destructive ones) are exposed, that the server has no authentication of its own, and
+  warns louder when bound off-loopback. The server ships no auth layer, so a deployment must
+  put an authenticating proxy or MCP gateway in front of it.
+
+### Fixed
+- Capped the SDK dependency at `mcp<2.0.0`. The 2.x SDK removed the `mcp.server.fastmcp` package
+  this server is built on, so an uncapped resolve installed an SDK the package could not import
+  (`ModuleNotFoundError: No module named 'mcp.server.fastmcp'` on a fresh `uv sync`).
+
 ## [1.2.0] - 2026-07-11
 
 ### Added
