@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Server failed to start against `mcp` 2.x.** The dependency was declared `mcp[cli]>=1.0.0`
+  with no upper bound, so resolvers picked `mcp` 2.0.0, which restructured the package and
+  removed `mcp.server.fastmcp`. `server.py` imports `FastMCP` from that path, so the process
+  died at import with `ModuleNotFoundError: No module named 'mcp.server.fastmcp'`. Existing
+  installs broke with no local change, and under an MCP client it surfaced only as a server
+  that silently never connected — no error shown in the client, which makes it easy to
+  misdiagnose as bad credentials. Constrained to `mcp[cli]>=1.0.0,<2` (resolves to 1.29.0,
+  which still ships `mcp.server.fastmcp`).
+
 ## [1.2.0] - 2026-07-11
 
 ### Added

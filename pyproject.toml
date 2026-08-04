@@ -25,7 +25,12 @@ classifiers = [
     "Topic :: Communications :: Email",
 ]
 dependencies = [
-    "mcp[cli]>=1.0.0",
+    # Upper bound is load-bearing: mcp 2.0 restructured the package and removed
+    # mcp.server.fastmcp, which server.py imports FastMCP from. Without <2 the
+    # resolver picks 2.x and the server dies at import with ModuleNotFoundError.
+    # Lifting this pin requires porting to the standalone `fastmcp` package or
+    # the mcp 2.x API.
+    "mcp[cli]>=1.0.0,<2",
     "requests>=2.28.0",
 ]
 
