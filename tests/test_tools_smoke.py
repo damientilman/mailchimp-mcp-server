@@ -37,11 +37,35 @@ class TestAccount:
         assert payload["total_subscribers"] == 12345
         assert payload["industry_stats"]["open_rate"] == 0.21
 
+    def test_get_account_info_propagates_error(self, mock_mc_request) -> None:
+        mock_mc_request({"error": "API Key Invalid", "detail": "bad key", "status": 401})
+        payload = _parse(server.get_account_info())
+        assert payload["error"] == "API Key Invalid"
+        assert payload["status"] == 401
+        assert "account_name" not in payload
+
     def test_ping(self, mock_mc_request) -> None:
+        mock_mc_request({"health_status": "Everything's Chimpy!"})
+        payload = _parse(server.ping())
+        assert payload["health_check"] == "Everything's Chimpy!"
+        assert payload["status_code"] == 200
+
+    def test_ping_accepts_legacy_health_check(self, mock_mc_request) -> None:
         mock_mc_request({"health_check": "Everything's Chimpy!"})
         payload = _parse(server.ping())
         assert payload["health_check"] == "Everything's Chimpy!"
         assert payload["status_code"] == 200
+
+    def test_ping_propagates_error(self, mock_mc_request) -> None:
+        mock_mc_request({"error": "API Key Invalid", "detail": "bad key", "status": 401})
+        payload = _parse(server.ping())
+        assert payload["error"] == "API Key Invalid"
+        assert payload["status"] == 401
+
+    def test_ping_unexpected_shape_is_an_error(self, mock_mc_request) -> None:
+        mock_mc_request({"something": "else"})
+        payload = _parse(server.ping())
+        assert "error" in payload
 
 
 class TestAudiences:

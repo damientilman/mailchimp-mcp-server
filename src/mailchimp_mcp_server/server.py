@@ -370,6 +370,8 @@ def get_account_info(account: str | None = None) -> str:
         get_account_info() -> {"account_name": "My Company", "total_subscribers": 5000, "industry_stats": {"open_rate": 0.21, ...}}
     """
     data = mc_request("/", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "account_name": data.get("account_name"),
         "email": data.get("email"),
@@ -404,6 +406,8 @@ def list_audiences(count: int = 10, offset: int = 0, account: str | None = None)
         are available in one request, without a get_audience_details call per audience.
     """
     data = mc_request("/lists", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     audiences = []
     for lst in data.get("lists", []):
         audiences.append({
@@ -443,6 +447,8 @@ def get_audience_details(list_id: str, account: str | None = None) -> str:
         enabled), email_type_option (bool).
     """
     data = mc_request(f"/lists/{list_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data["id"],
         "name": data["name"],
@@ -490,6 +496,8 @@ def list_campaigns(count: int = 20, offset: int = 0, status: Optional[str] = Non
     if since_send_time:
         params["since_send_time"] = since_send_time
     data = mc_request("/campaigns", params=params, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     campaigns = []
     for c in data.get("campaigns", []):
         campaigns.append({
@@ -531,6 +539,8 @@ def get_campaign_details(campaign_id: str, account: str | None = None) -> str:
         get_campaign_details(campaign_id="abc123def4") -> {"id": "abc123def4", "status": "sent", "settings": {"subject_line": "Spring Sale", ...}}
     """
     data = mc_request(f"/campaigns/{campaign_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data["id"],
         "type": data.get("type"),
@@ -630,6 +640,8 @@ def get_campaign_report(campaign_id: str, account: str | None = None) -> str:
         click_rate), bounces, forwards, list_stats, industry_stats.
     """
     data = mc_request(f"/reports/{campaign_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "campaign_title": data.get("campaign_title"),
         "subject_line": data.get("subject_line"),
@@ -669,6 +681,8 @@ def get_campaign_click_details(campaign_id: str, count: int = 20, account: str |
         get_campaign_click_details(campaign_id="abc123") -> {"total_items": 5, "links": [{"url": "https://example.com", "total_clicks": 120, "unique_clicks": 95, "click_percentage": 0.019}]}
     """
     data = mc_request(f"/reports/{campaign_id}/click-details", params={"count": count}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     links = []
     for url_report in data.get("urls_clicked", []):
         links.append({
@@ -710,6 +724,8 @@ def list_audience_members(list_id: str, count: int = 20, offset: int = 0, status
     if status:
         params["status"] = status
     data = mc_request(f"/lists/{list_id}/members", params=params, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     members = []
     for m in data.get("members", []):
         members.append({
@@ -754,6 +770,8 @@ def search_members(query: str, list_id: Optional[str] = None, account: str | Non
     if list_id:
         params["list_id"] = list_id
     data = mc_request("/search-members", params=params, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     results = []
     for match in data.get("exact_matches", {}).get("members", []):
         results.append({
@@ -791,6 +809,8 @@ def get_audience_growth_history(list_id: str, count: int = 12, account: str | No
         reconfirm, cleaned, pending, transactional (all cumulative ints).
     """
     data = mc_request(f"/lists/{list_id}/growth-history", params={"count": count}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     history = []
     for h in data.get("history", []):
         history.append({
@@ -828,6 +848,8 @@ def list_automations(count: int = 20, offset: int = 0, account: str | None = Non
         title, emails_sent, start_time, create_time, list_id.
     """
     data = mc_request("/automations", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     automations = []
     for a in data.get("automations", []):
         automations.append({
@@ -935,6 +957,8 @@ def list_templates(count: int = 20, offset: int = 0, account: str | None = None)
         'base'), date_created, active (boolean).
     """
     data = mc_request("/templates", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     templates = []
     for t in data.get("templates", []):
         templates.append({
@@ -966,6 +990,8 @@ def get_template_default_content(template_id: str, account: str | None = None) -
         JSON with html (string, full HTML content), sections (object with editable content blocks).
     """
     data = mc_request(f"/templates/{template_id}/default-content", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "html": data.get("html"),
         "sections": data.get("sections"),
@@ -993,6 +1019,8 @@ def get_template(template_id: str, account: str | None = None) -> str:
         share_url, category.
     """
     data = mc_request(f"/templates/{template_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -1037,6 +1065,8 @@ def create_template(name: str, html: str, folder_id: Optional[str] = None, accou
     if folder_id:
         body["folder_id"] = folder_id
     data = mc_request("/templates", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -1074,6 +1104,8 @@ def update_template(template_id: str, name: Optional[str] = None, html: Optional
     if html is not None:
         body["html"] = html
     data = mc_request(f"/templates/{template_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -1130,6 +1162,8 @@ def list_segments(list_id: str, count: int = 20, offset: int = 0, account: str |
         type ('static'/'saved'), created_at, updated_at.
     """
     data = mc_request(f"/lists/{list_id}/segments", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     segments = []
     for s in data.get("segments", []):
         segments.append({
@@ -1182,6 +1216,8 @@ def add_member(list_id: str, email_address: str, status: str = "subscribed", fir
     if tags:
         body["tags"] = [t.strip() for t in tags.split(",")]
     data = mc_request(f"/lists/{list_id}/members", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "email_address": data.get("email_address"),
@@ -1231,6 +1267,8 @@ def update_member(list_id: str, email_address: str, status: Optional[str] = None
     if merge_fields:
         body["merge_fields"] = merge_fields
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "email_address": data.get("email_address"),
@@ -1262,6 +1300,8 @@ def unsubscribe_member(list_id: str, email_address: str, account: str | None = N
     if subscriber_hash is None:
         return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}", body={"status": "unsubscribed"}, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "email_address": data.get("email_address"),
         "status": data.get("status"),
@@ -1375,6 +1415,8 @@ def batch_subscribe(list_id: str, members_json: str, update_existing: bool = Tru
         return json.dumps({"error": f"members_json holds {len(members)} members; the max is 500. Use create_batch for larger imports."}, indent=2)
     body = {"members": members, "update_existing": update_existing}
     data = mc_request(f"/lists/{list_id}", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "new_members": len(data.get("new_members", [])),
         "updated_members": len(data.get("updated_members", [])),
@@ -1424,6 +1466,8 @@ def update_audience(list_id: str, name: Optional[str] = None, from_name: Optiona
     if campaign_defaults:
         body["campaign_defaults"] = campaign_defaults
     data = mc_request(f"/lists/{list_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -1673,6 +1717,8 @@ def update_campaign(campaign_id: str, subject_line: Optional[str] = None, title:
             recipients["segment_opts"] = {"saved_segment_id": int(segment_id)}
         body["recipients"] = recipients
     data = mc_request(f"/campaigns/{campaign_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "status": data.get("status"),
@@ -1802,6 +1848,8 @@ def replicate_campaign(campaign_id: str, account: str | None = None) -> str:
     if (guard := _guard_write(action="replicate campaign", campaign_id=campaign_id, account=account)):
         return guard
     data = mc_request(f"/campaigns/{campaign_id}/actions/replicate", method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "status": data.get("status"),
@@ -1958,6 +2006,8 @@ def create_segment(list_id: str, name: str, static: bool = True, match: Optional
     elif static:
         body["static_segment"] = []
     data = mc_request(f"/lists/{list_id}/segments", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -2020,6 +2070,8 @@ def add_members_to_segment(list_id: str, segment_id: str, emails: str, account: 
         method="POST",
         account=account,
     )
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "total_added": data.get("total_added"),
         "total_removed": data.get("total_removed"),
@@ -2055,6 +2107,8 @@ def remove_members_from_segment(list_id: str, segment_id: str, emails: str, acco
         method="POST",
         account=account,
     )
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "total_added": data.get("total_added"),
         "total_removed": data.get("total_removed"),
@@ -2097,6 +2151,8 @@ def update_segment(list_id: str, segment_id: str, name: Optional[str] = None, ma
             return json.dumps({"error": f"Invalid conditions_json: {e}"}, indent=2)
         body["options"] = {"match": match, "conditions": conditions}
     data = mc_request(f"/lists/{list_id}/segments/{segment_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -2129,6 +2185,8 @@ def get_segment(list_id: str, segment_id: str, account: str | None = None) -> st
         get_segment(list_id="abc123", segment_id="12345") -> {"id": 12345, "name": "VIP", "member_count": 150, "type": "static", ...}
     """
     data = mc_request(f"/lists/{list_id}/segments/{segment_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -2164,6 +2222,8 @@ def list_segment_members(list_id: str, segment_id: str, count: int = 20, offset:
         list_segment_members(list_id="abc123", segment_id="12345", count=50) -> {"total_items": 150, "members": [{"email_address": "jane@co.com", ...}]}
     """
     data = mc_request(f"/lists/{list_id}/segments/{segment_id}/members", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     members = []
     for m in data.get("members", []):
         members.append({
@@ -2205,6 +2265,8 @@ def list_merge_fields(list_id: str, count: int = 50, offset: int = 0, account: s
         list_merge_fields(list_id="abc123") -> {"total_items": 6, "merge_fields": [{"merge_id": 1, "tag": "FNAME", "name": "First Name", "type": "text", ...}]}
     """
     data = mc_request(f"/lists/{list_id}/merge-fields", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     fields = []
     for f in data.get("merge_fields", []):
         fields.append({
@@ -2258,6 +2320,8 @@ def create_merge_field(list_id: str, name: str, type: str, tag: Optional[str] = 
     if choices:
         body["options"] = {"choices": [c.strip() for c in choices.split(",")]}
     data = mc_request(f"/lists/{list_id}/merge-fields", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "merge_id": data.get("merge_id"),
         "tag": data.get("tag"),
@@ -2303,6 +2367,8 @@ def update_merge_field(list_id: str, merge_id: str, name: Optional[str] = None, 
     if choices is not None:
         body["options"] = {"choices": [c.strip() for c in choices.split(",")]}
     data = mc_request(f"/lists/{list_id}/merge-fields/{merge_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "merge_id": data.get("merge_id"),
         "tag": data.get("tag"),
@@ -2365,6 +2431,8 @@ def list_interest_categories(list_id: str, count: int = 50, offset: int = 0, acc
         'radio'/'hidden'), list_id.
     """
     data = mc_request(f"/lists/{list_id}/interest-categories", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     categories = []
     for c in data.get("categories", []):
         categories.append({
@@ -2406,6 +2474,8 @@ def create_interest_category(list_id: str, title: str, type: str, account: str |
         return guard
     body = {"title": title, "type": type}
     data = mc_request(f"/lists/{list_id}/interest-categories", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "title": data.get("title"),
@@ -2436,6 +2506,8 @@ def list_interests(list_id: str, category_id: str, count: int = 50, offset: int 
         JSON with total_items and interests array. Each interest: id, name, subscriber_count, display_order.
     """
     data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     interests = []
     for i in data.get("interests", []):
         interests.append({
@@ -2476,6 +2548,8 @@ def create_interest(list_id: str, category_id: str, name: str, account: str | No
         return guard
     body = {"name": name}
     data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -2565,6 +2639,8 @@ def list_webhooks(list_id: str, account: str | None = None) -> str:
         user, admin, api), list_id.
     """
     data = mc_request(f"/lists/{list_id}/webhooks", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     webhooks = []
     for w in data.get("webhooks", []):
         webhooks.append({
@@ -2609,6 +2685,8 @@ def create_webhook(list_id: str, url: str, events: Optional[str] = None, sources
         source_list = [s.strip() for s in sources.split(",")]
         body["sources"] = {s: True for s in source_list}
     data = mc_request(f"/lists/{list_id}/webhooks", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "url": data.get("url"),
@@ -2665,6 +2743,8 @@ def get_email_activity(campaign_id: str, count: int = 20, offset: int = 0, accou
         ('open'/'click'/'bounce'), timestamp, url (clicks only).
     """
     data = mc_request(f"/reports/{campaign_id}/email-activity", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     emails = []
     for e in data.get("emails", []):
         emails.append({
@@ -2694,6 +2774,8 @@ def get_open_details(campaign_id: str, count: int = 20, offset: int = 0, account
         with timestamps.
     """
     data = mc_request(f"/reports/{campaign_id}/open-details", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     members = []
     for m in data.get("members", []):
         members.append({
@@ -2728,6 +2810,8 @@ def get_campaign_recipients(campaign_id: str, count: int = 20, offset: int = 0, 
         get_campaign_recipients(campaign_id="abc123", count=100) -> {"total_items": 5000, "recipients": [{"email_address": "jane@co.com", "status": "sent", "open_count": 3, ...}]}
     """
     data = mc_request(f"/reports/{campaign_id}/sent-to", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     recipients = []
     for r in data.get("sent_to", []):
         recipients.append({
@@ -2759,6 +2843,8 @@ def get_campaign_unsubscribes(campaign_id: str, count: int = 20, offset: int = 0
         timestamp.
     """
     data = mc_request(f"/reports/{campaign_id}/unsubscribed", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     unsubs = []
     for u in data.get("unsubscribes", []):
         unsubs.append({
@@ -2790,6 +2876,8 @@ def get_domain_performance(campaign_id: str, account: str | None = None) -> str:
         get_domain_performance(campaign_id="abc123") -> {"total_items": 15, "domains": [{"domain": "gmail.com", "emails_sent": 2000, "opens": 500, "clicks": 80, ...}]}
     """
     data = mc_request(f"/reports/{campaign_id}/domain-performance", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     domains = []
     for d in data.get("domains", []):
         domains.append({
@@ -2824,6 +2912,8 @@ def get_campaign_advice(campaign_id: str, account: str | None = None) -> str:
         'neutral'), message (string, the advice text).
     """
     data = mc_request(f"/reports/{campaign_id}/advice", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     advice = []
     for a in data.get("advice", []):
         advice.append({"type": a.get("type"), "message": a.get("message")})
@@ -2852,6 +2942,8 @@ def get_campaign_locations(campaign_id: str, count: int = 20, offset: int = 0, a
         opens (int, opens from that region).
     """
     data = mc_request(f"/reports/{campaign_id}/locations", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     locations = []
     for loc in data.get("locations", []):
         locations.append({
@@ -2883,6 +2975,8 @@ def get_eepurl_activity(campaign_id: str, account: str | None = None) -> str:
         unique_likes), referrers array (list of {referrer, clicks, first_click, last_click}).
     """
     data = mc_request(f"/reports/{campaign_id}/eepurl", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "eepurl": data.get("eepurl"),
         "twitter": data.get("twitter"),
@@ -2912,6 +3006,8 @@ def get_ecommerce_product_activity(campaign_id: str, count: int = 20, offset: in
         (float, store currency), total_purchased.
     """
     data = mc_request(f"/reports/{campaign_id}/ecommerce-product-activity", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     products = []
     for p in data.get("products", []):
         products.append({
@@ -2943,6 +3039,8 @@ def get_campaign_sub_reports(campaign_id: str, account: str | None = None) -> st
         RSS includes per-item send stats with dates.
     """
     data = mc_request(f"/reports/{campaign_id}/sub-reports", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -2972,6 +3070,8 @@ def get_member_activity(list_id: str, email_address: str, count: int = 20, accou
     if subscriber_hash is None:
         return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/activity", params={"count": count}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     activities = []
     for a in data.get("activity", []):
         activities.append({
@@ -3009,6 +3109,8 @@ def get_member_tags(list_id: str, email_address: str, count: int = 50, account: 
     if subscriber_hash is None:
         return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/tags", params={"count": count}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     tags = []
     for t in data.get("tags", []):
         tags.append({
@@ -3046,6 +3148,8 @@ def get_member_events(list_id: str, email_address: str, count: int = 20, account
     if subscriber_hash is None:
         return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/events", params={"count": count}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     events = []
     for e in data.get("events", []):
         events.append({
@@ -3091,6 +3195,8 @@ def get_member_journey_events(list_id: str, email_address: str, count: int = 50,
         params={"count": count},
         account=account,
     )
+    if "error" in data:
+        return json.dumps(data, indent=2)
     automation_keywords = ("automation", "journey")
     filtered = []
     raw_activity = data.get("activity", [])
@@ -3144,6 +3250,8 @@ def list_member_notes(list_id: str, email_address: str, count: int = 20, offset:
         params={"count": count, "offset": offset},
         account=account,
     )
+    if "error" in data:
+        return json.dumps(data, indent=2)
     notes = []
     for n in data.get("notes", []):
         notes.append({
@@ -3296,6 +3404,8 @@ def get_automation_emails(automation_id: str, account: str | None = None) -> str
         status ('sending'/'paused'/'draft'), subject_line, title, emails_sent, send_time, delay.
     """
     data = mc_request(f"/automations/{automation_id}/emails", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     emails = []
     for e in data.get("emails", []):
         emails.append({
@@ -3333,6 +3443,8 @@ def get_automation_email_queue(automation_id: str, email_id: str, account: str |
         get_automation_email_queue(automation_id="auto123", email_id="email456") -> {"total_items": 12, "queue": [{"email_address": "jane@co.com", "next_send": "2025-06-02T10:00:00Z"}]}
     """
     data = mc_request(f"/automations/{automation_id}/emails/{email_id}/queue", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     queue = []
     for q in data.get("queue", []):
         queue.append({
@@ -3415,6 +3527,8 @@ def list_landing_pages(count: int = 20, offset: int = 0, account: str | None = N
         ('published'/'unpublished'/'draft'), url (null if not published), published_at, created_at, list_id.
     """
     data = mc_request("/landing-pages", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     pages = []
     for p in data.get("landing_pages", []):
         pages.append({
@@ -3448,6 +3562,8 @@ def get_landing_page(page_id: str, account: str | None = None) -> str:
         published_at, created_at, updated_at, list_id, tracking.
     """
     data = mc_request(f"/landing-pages/{page_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "name": data.get("name"),
@@ -3669,6 +3785,8 @@ def list_ecommerce_stores(account: str | None = None) -> str:
         platform, domain, currency_code (ISO 4217), money_format, created_at.
     """
     data = mc_request("/ecommerce/stores", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     stores = []
     for s in data.get("stores", []):
         stores.append({
@@ -3704,6 +3822,8 @@ def list_store_orders(store_id: str, count: int = 20, offset: int = 0, account: 
         lines_count.
     """
     data = mc_request(f"/ecommerce/stores/{store_id}/orders", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     orders = []
     for o in data.get("orders", []):
         orders.append({
@@ -3744,6 +3864,8 @@ def list_store_products(store_id: str, count: int = 20, offset: int = 0, account
         list_store_products(store_id="store123", count=50) -> {"total_items": 200, "products": [{"id": "prod_123", "title": "Blue T-Shirt", "variants_count": 3, ...}]}
     """
     data = mc_request(f"/ecommerce/stores/{store_id}/products", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     products = []
     for p in data.get("products", []):
         products.append({
@@ -3782,6 +3904,8 @@ def list_store_customers(store_id: str, count: int = 20, offset: int = 0, accoun
         list_store_customers(store_id="store123", count=50) -> {"total_items": 500, "customers": [{"email_address": "jane@co.com", "orders_count": 5, "total_spent": 299.95, ...}]}
     """
     data = mc_request(f"/ecommerce/stores/{store_id}/customers", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     customers = []
     for c in data.get("customers", []):
         customers.append({
@@ -3827,6 +3951,8 @@ def list_store_carts(store_id: str, count: int = 20, offset: int = 0, account: s
         params={"count": count, "offset": offset},
         account=account,
     )
+    if "error" in data:
+        return json.dumps(data, indent=2)
     carts = []
     for c in data.get("carts", []):
         carts.append({
@@ -4045,6 +4171,8 @@ def list_promo_rules(store_id: str, count: int = 20, offset: int = 0, account: s
         params={"count": count, "offset": offset},
         account=account,
     )
+    if "error" in data:
+        return json.dumps(data, indent=2)
     rules = []
     for r in data.get("promo_rules", []):
         rules.append({
@@ -4284,6 +4412,8 @@ def list_promo_codes(store_id: str, promo_rule_id: str, count: int = 20, offset:
         params={"count": count, "offset": offset},
         account=account,
     )
+    if "error" in data:
+        return json.dumps(data, indent=2)
     codes = []
     for c in data.get("promo_codes", []):
         codes.append({
@@ -4494,6 +4624,8 @@ def list_campaign_folders(count: int = 50, offset: int = 0, account: str | None 
         JSON with total_items and folders array. Each folder: id, name, count (campaigns in folder).
     """
     data = mc_request("/campaign-folders", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     folders = []
     for f in data.get("folders", []):
         folders.append({
@@ -4532,6 +4664,8 @@ def create_batch(operations: str, account: str | None = None) -> str:
     except json.JSONDecodeError as e:
         return json.dumps({"error": f"Invalid operations: {e}"}, indent=2)
     data = mc_request("/batches", body={"operations": ops}, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "status": data.get("status"),
@@ -4564,6 +4698,8 @@ def get_batch_status(batch_id: str, account: str | None = None) -> str:
         get_batch_status(batch_id="batch123") -> {"status": "finished", "total_operations": 100, "finished_operations": 100, "errored_operations": 2, "response_body_url": "https://...", ...}
     """
     data = mc_request(f"/batches/{batch_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "status": data.get("status"),
@@ -4594,6 +4730,8 @@ def list_batches(count: int = 20, offset: int = 0, account: str | None = None) -
         total_operations, finished_operations, errored_operations, submitted_at, completed_at.
     """
     data = mc_request("/batches", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     batches = []
     for b in data.get("batches", []):
         batches.append({
@@ -4623,13 +4761,17 @@ def ping(account: str | None = None) -> str:
         account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
 
     Returns:
-        JSON with health_check ('ok' if connected), status_code (200 if healthy).
+        JSON with health_check (Mailchimp's health message when connected), status_code (200 if
+        healthy). On failure, the error object from the API call (error, detail, status).
     """
     data = mc_request("/ping", account=account)
-    return json.dumps({
-        "health_check": data.get("health_check"),
-        "status_code": 200 if "health_check" in data else data.get("status", 0),
-    }, indent=2)
+    if "error" in data:
+        return json.dumps(data, indent=2)
+    # Mailchimp renamed the field from health_check to health_status; accept both.
+    health = data.get("health_status", data.get("health_check"))
+    if health is None:
+        return json.dumps({"error": "Unexpected response from /ping", "detail": str(data)[:500]}, indent=2)
+    return json.dumps({"health_check": health, "status_code": 200}, indent=2)
 
 
 @mcp.tool()
@@ -4653,6 +4795,8 @@ def search_campaigns(query: str, count: int = 20, offset: int = 0, account: str 
         status, title, subject_line, send_time, emails_sent.
     """
     data = mc_request("/search-campaigns", params={"query": query, "count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     results = []
     for r in data.get("results", []):
         c = r.get("campaign", {})
@@ -4711,6 +4855,8 @@ def search_automation_campaigns(count: int = 20, offset: int = 0, list_id: Optio
     if before_send_time:
         params["before_send_time"] = before_send_time
     data = mc_request("/campaigns", params=params, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     campaigns = []
     for c in data.get("campaigns", []):
         campaigns.append({
@@ -4749,6 +4895,8 @@ def resend_to_non_openers(campaign_id: str, account: str | None = None) -> str:
     if (guard := _guard_write(action="resend to non-openers", campaign_id=campaign_id, account=account)):
         return guard
     data = mc_request(f"/campaigns/{campaign_id}/actions/create-resend", method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps({
         "id": data.get("id"),
         "status": data.get("status"),
@@ -4855,6 +5003,8 @@ def get_file(file_id: str, account: str | None = None) -> str:
         folder_id, created_at, created_by.
     """
     data = mc_request(f"/file-manager/files/{file_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -4920,6 +5070,8 @@ def delete_file(file_id: str, account: str | None = None) -> str:
     if (guard := _guard_write(action="delete file", file_id=file_id, account=account)):
         return guard
     data = mc_request(f"/file-manager/files/{file_id}", method="DELETE", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5000,6 +5152,8 @@ def get_survey(list_id: str, survey_id: str, account: str | None = None) -> str:
         JSON survey object including id, title, status, url, questions, created_at, updated_at.
     """
     data = mc_request(f"/lists/{list_id}/surveys/{survey_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5073,6 +5227,8 @@ def list_signup_forms(list_id: str, account: str | None = None) -> str:
         {section, value}), styles (array of {section, options}), and signup_form_url.
     """
     data = mc_request(f"/lists/{list_id}/signup-forms", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5108,6 +5264,8 @@ def customize_signup_form(list_id: str, header: Optional[dict] = None, contents:
     if (guard := _guard_write(action="customize signup form", list_id=list_id, account=account)):
         return guard
     data = mc_request(f"/lists/{list_id}/signup-forms", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5129,6 +5287,8 @@ def list_verified_domains(account: str | None = None) -> str:
         authenticated (boolean), verification_status, authentication_status.
     """
     data = mc_request("/verified-domains", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5150,6 +5310,8 @@ def get_verified_domain(domain_name: str, account: str | None = None) -> str:
         authentication_status.
     """
     data = mc_request(f"/verified-domains/{domain_name}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5175,6 +5337,8 @@ def create_verified_domain(verification_email: str, account: str | None = None) 
         return guard
     body: dict = {"verification_email": verification_email}
     data = mc_request("/verified-domains", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5200,6 +5364,8 @@ def verify_verified_domain(domain_name: str, code: str, account: str | None = No
         return guard
     body: dict = {"code": code}
     data = mc_request(f"/verified-domains/{domain_name}/actions/verify", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5244,6 +5410,8 @@ def list_connected_sites(account: str | None = None) -> str:
         site_script (object with url and fragment), status, created_at, updated_at.
     """
     data = mc_request("/connected-sites", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5265,6 +5433,8 @@ def get_connected_site(connected_site_id: str, account: str | None = None) -> st
         created_at, updated_at.
     """
     data = mc_request(f"/connected-sites/{connected_site_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5291,6 +5461,8 @@ def create_connected_site(foreign_id: str, domain: str, account: str | None = No
         return guard
     body: dict = {"foreign_id": foreign_id, "domain": domain}
     data = mc_request("/connected-sites", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5337,6 +5509,8 @@ def verify_connected_site_script(connected_site_id: str, account: str | None = N
     if (guard := _guard_write(action="verify connected site script", connected_site_id=connected_site_id, account=account)):
         return guard
     data = mc_request(f"/connected-sites/{connected_site_id}/actions/verify-script-installation", method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5357,6 +5531,8 @@ def list_authorized_apps(account: str | None = None) -> str:
         account usernames that authorized it).
     """
     data = mc_request("/authorized-apps", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5377,6 +5553,8 @@ def get_authorized_app(app_id: str, account: str | None = None) -> str:
         JSON with id, name, description, users (array of account usernames that authorized it).
     """
     data = mc_request(f"/authorized-apps/{app_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5399,6 +5577,8 @@ def get_chimp_chatter(count: int = 10, offset: int = 0, account: str | None = No
         update_time, url, campaign_id, list_id.
     """
     data = mc_request("/activity-feed/chimp-chatter", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5419,6 +5599,8 @@ def list_account_exports(account: str | None = None) -> str:
         8601), finished (ISO 8601 or null), size_in_bytes, download_url.
     """
     data = mc_request("/account-exports", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5440,6 +5622,8 @@ def get_account_export(export_id: str, account: str | None = None) -> str:
         size_in_bytes, download_url.
     """
     data = mc_request(f"/account-exports/{export_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5465,6 +5649,8 @@ def create_account_export(include_stages: list, account: str | None = None) -> s
         return guard
     body: dict = {"include_stages": include_stages}
     data = mc_request("/account-exports", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5489,6 +5675,8 @@ def create_campaign_folder(name: str, account: str | None = None) -> str:
         return guard
     body: dict = {"name": name}
     data = mc_request("/campaign-folders", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5509,6 +5697,8 @@ def get_campaign_folder(folder_id: str, account: str | None = None) -> str:
         JSON with id, name, and count of campaigns in the folder.
     """
     data = mc_request(f"/campaign-folders/{folder_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5533,6 +5723,8 @@ def update_campaign_folder(folder_id: str, name: str, account: str | None = None
         return guard
     body: dict = {"name": name}
     data = mc_request(f"/campaign-folders/{folder_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5578,6 +5770,8 @@ def list_template_folders(count: int = 10, offset: int = 0, account: str | None 
         JSON with total_items and folders array. Each: id, name, count of templates.
     """
     data = mc_request("/template-folders", params={"count": count, "offset": offset}, account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5598,6 +5792,8 @@ def get_template_folder(folder_id: str, account: str | None = None) -> str:
         JSON with id, name, and count of templates in the folder.
     """
     data = mc_request(f"/template-folders/{folder_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5621,6 +5817,8 @@ def create_template_folder(name: str, account: str | None = None) -> str:
         return guard
     body: dict = {"name": name}
     data = mc_request("/template-folders", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5645,6 +5843,8 @@ def update_template_folder(folder_id: str, name: str, account: str | None = None
         return guard
     body: dict = {"name": name}
     data = mc_request(f"/template-folders/{folder_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5691,6 +5891,8 @@ def get_campaign_send_checklist(campaign_id: str, account: str | None = None) ->
         id, heading, details.
     """
     data = mc_request(f"/campaigns/{campaign_id}/send-checklist", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5736,6 +5938,8 @@ def get_campaign_feedback(campaign_id: str, feedback_id: str, account: str | Non
         JSON with feedback_id, message, is_complete, block_id, created_by, created_at, updated_at.
     """
     data = mc_request(f"/campaigns/{campaign_id}/feedback/{feedback_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5764,6 +5968,8 @@ def create_campaign_feedback(campaign_id: str, message: str, block_id: Optional[
     if block_id is not None:
         body["block_id"] = block_id
     data = mc_request(f"/campaigns/{campaign_id}/feedback", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5789,6 +5995,8 @@ def update_campaign_feedback(campaign_id: str, feedback_id: str, message: str, a
         return guard
     body: dict = {"message": message}
     data = mc_request(f"/campaigns/{campaign_id}/feedback/{feedback_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5885,6 +6093,8 @@ def get_campaign_abuse_report(campaign_id: str, report_id: str, account: str | N
         JSON with id, campaign_id, list_id, email_id, email_address, date, merge_fields, vip.
     """
     data = mc_request(f"/reports/{campaign_id}/abuse-reports/{report_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5907,6 +6117,8 @@ def pause_rss_campaign(campaign_id: str, account: str | None = None) -> str:
     if (guard := _guard_write(action="pause RSS campaign", campaign_id=campaign_id, account=account)):
         return guard
     data = mc_request(f"/campaigns/{campaign_id}/actions/pause", method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -5929,6 +6141,8 @@ def resume_rss_campaign(campaign_id: str, account: str | None = None) -> str:
     if (guard := _guard_write(action="resume RSS campaign", campaign_id=campaign_id, account=account)):
         return guard
     data = mc_request(f"/campaigns/{campaign_id}/actions/resume", method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6051,6 +6265,8 @@ def get_audience_abuse_report(list_id: str, report_id: str, account: str | None 
         date (ISO 8601). Returns error if list_id or report_id is invalid.
     """
     data = mc_request(f"/lists/{list_id}/abuse-reports/{report_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6076,6 +6292,8 @@ def get_member_goals(list_id: str, email_address: str, account: str | None = Non
     if subscriber_hash is None:
         return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/goals", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6108,6 +6326,8 @@ def add_member_event(list_id: str, email_address: str, name: str, properties: Op
     if properties is not None:
         body["properties"] = properties
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/events", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6137,6 +6357,8 @@ def delete_member_permanent(list_id: str, email_address: str, account: str | Non
     if subscriber_hash is None:
         return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}/actions/delete-permanent", method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6173,6 +6395,8 @@ def upsert_member(list_id: str, email_address: str, status_if_new: str = "subscr
     if tags is not None:
         body["tags"] = tags
     data = mc_request(f"/lists/{list_id}/members/{subscriber_hash}", body=body, method="PUT", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6214,6 +6438,8 @@ def get_batch_webhook(batch_webhook_id: str, account: str | None = None) -> str:
         JSON with id, url, enabled (boolean). Returns error if batch_webhook_id is invalid.
     """
     data = mc_request(f"/batch-webhooks/{batch_webhook_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6238,6 +6464,8 @@ def create_batch_webhook(url: str, account: str | None = None) -> str:
         return guard
     body: dict = {"url": url}
     data = mc_request("/batch-webhooks", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6263,6 +6491,8 @@ def update_batch_webhook(batch_webhook_id: str, url: str, account: str | None = 
         return guard
     body: dict = {"url": url}
     data = mc_request(f"/batch-webhooks/{batch_webhook_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6287,6 +6517,8 @@ def delete_batch_webhook(batch_webhook_id: str, account: str | None = None) -> s
     if (guard := _guard_write(action="delete batch webhook", batch_webhook_id=batch_webhook_id, account=account)):
         return guard
     data = mc_request(f"/batch-webhooks/{batch_webhook_id}", method="DELETE", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6308,6 +6540,8 @@ def get_automation_email(workflow_id: str, workflow_email_id: str, account: str 
         JSON with the automation email details.
     """
     data = mc_request(f"/automations/{workflow_id}/emails/{workflow_email_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6331,6 +6565,8 @@ def pause_automation_email(workflow_id: str, workflow_email_id: str, account: st
     if (guard := _guard_write(action="pause automation email", workflow_email_id=workflow_email_id, account=account)):
         return guard
     data = mc_request(f"/automations/{workflow_id}/emails/{workflow_email_id}/actions/pause", method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6354,6 +6590,8 @@ def start_automation_email(workflow_id: str, workflow_email_id: str, account: st
     if (guard := _guard_write(action="start automation email", workflow_email_id=workflow_email_id, account=account)):
         return guard
     data = mc_request(f"/automations/{workflow_id}/emails/{workflow_email_id}/actions/start", method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6378,6 +6616,8 @@ def add_automation_queue_subscriber(workflow_id: str, workflow_email_id: str, em
     if (guard := _guard_write(action="add subscriber to automation email queue", email_address=email_address, account=account)):
         return guard
     data = mc_request(f"/automations/{workflow_id}/emails/{workflow_email_id}/queue", body={"email_address": email_address}, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6403,6 +6643,8 @@ def get_automation_queue_subscriber(workflow_id: str, workflow_email_id: str, em
     if subscriber_hash is None:
         return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/automations/{workflow_id}/emails/{workflow_email_id}/queue/{subscriber_hash}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6448,6 +6690,8 @@ def remove_automation_subscriber(workflow_id: str, email_address: str, account: 
     if (guard := _guard_write(action="remove subscriber from automation workflow", email_address=email_address, account=account)):
         return guard
     data = mc_request(f"/automations/{workflow_id}/removed-subscribers", body={"email_address": email_address}, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6472,6 +6716,8 @@ def get_automation_removed_subscriber(workflow_id: str, email_address: str, acco
     if subscriber_hash is None:
         return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
     data = mc_request(f"/automations/{workflow_id}/removed-subscribers/{subscriber_hash}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6515,6 +6761,8 @@ def get_landing_page_report(outreach_id: str, account: str | None = None) -> str
         JSON with the landing page report.
     """
     data = mc_request(f"/reporting/landing-pages/{outreach_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6558,6 +6806,8 @@ def get_survey_report(survey_id: str, account: str | None = None) -> str:
         JSON with the survey report.
     """
     data = mc_request(f"/reporting/surveys/{survey_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6603,6 +6853,8 @@ def get_survey_response(survey_id: str, response_id: str, account: str | None = 
         JSON with the survey response details.
     """
     data = mc_request(f"/reporting/surveys/{survey_id}/responses/{response_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6680,6 +6932,8 @@ def create_store(store_id: str, name: str, currency_code: str, additional_fields
     if additional_fields:
         body.update(additional_fields)
     data = mc_request("/ecommerce/stores", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6700,6 +6954,8 @@ def get_store(store_id: str, account: str | None = None) -> str:
         JSON with the store object.
     """
     data = mc_request(f"/ecommerce/stores/{store_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6728,6 +6984,8 @@ def update_store(store_id: str, additional_fields: Optional[dict] = None, accoun
     if additional_fields:
         body.update(additional_fields)
     data = mc_request(f"/ecommerce/stores/{store_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6751,6 +7009,8 @@ def delete_store(store_id: str, account: str | None = None) -> str:
     if (guard := _guard_write(action="delete store", store_id=store_id, account=account)):
         return guard
     data = mc_request(f"/ecommerce/stores/{store_id}", method="DELETE", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6772,6 +7032,8 @@ def get_store_product(store_id: str, product_id: str, account: str | None = None
         JSON with the product object including its variants array.
     """
     data = mc_request(f"/ecommerce/stores/{store_id}/products/{product_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6804,6 +7066,8 @@ def create_store_product(store_id: str, product_id: str, title: str, variants: l
     if additional_fields:
         body.update(additional_fields)
     data = mc_request(f"/ecommerce/stores/{store_id}/products", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6833,6 +7097,8 @@ def update_store_product(store_id: str, product_id: str, additional_fields: Opti
     if additional_fields:
         body.update(additional_fields)
     data = mc_request(f"/ecommerce/stores/{store_id}/products/{product_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6856,6 +7122,8 @@ def delete_store_product(store_id: str, product_id: str, account: str | None = N
     if (guard := _guard_write(action="delete product", store_id=store_id, product_id=product_id, account=account)):
         return guard
     data = mc_request(f"/ecommerce/stores/{store_id}/products/{product_id}", method="DELETE", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6903,6 +7171,8 @@ def get_store_product_variant(store_id: str, product_id: str, variant_id: str, a
         JSON with the variant object.
     """
     data = mc_request(f"/ecommerce/stores/{store_id}/products/{product_id}/variants/{variant_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6934,6 +7204,8 @@ def create_store_product_variant(store_id: str, product_id: str, variant_id: str
     if additional_fields:
         body.update(additional_fields)
     data = mc_request(f"/ecommerce/stores/{store_id}/products/{product_id}/variants", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6964,6 +7236,8 @@ def update_store_product_variant(store_id: str, product_id: str, variant_id: str
     if additional_fields:
         body.update(additional_fields)
     data = mc_request(f"/ecommerce/stores/{store_id}/products/{product_id}/variants/{variant_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -6988,6 +7262,8 @@ def delete_store_product_variant(store_id: str, product_id: str, variant_id: str
     if (guard := _guard_write(action="delete product variant", store_id=store_id, product_id=product_id, variant_id=variant_id, account=account)):
         return guard
     data = mc_request(f"/ecommerce/stores/{store_id}/products/{product_id}/variants/{variant_id}", method="DELETE", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7009,6 +7285,8 @@ def get_store_customer(store_id: str, customer_id: str, account: str | None = No
         JSON with the customer object.
     """
     data = mc_request(f"/ecommerce/stores/{store_id}/customers/{customer_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7040,6 +7318,8 @@ def create_store_customer(store_id: str, customer_id: str, email_address: str, o
     if additional_fields:
         body.update(additional_fields)
     data = mc_request(f"/ecommerce/stores/{store_id}/customers", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7069,6 +7349,8 @@ def update_store_customer(store_id: str, customer_id: str, additional_fields: Op
     if additional_fields:
         body.update(additional_fields)
     data = mc_request(f"/ecommerce/stores/{store_id}/customers/{customer_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7092,6 +7374,8 @@ def delete_store_customer(store_id: str, customer_id: str, account: str | None =
     if (guard := _guard_write(action="delete customer", store_id=store_id, customer_id=customer_id, account=account)):
         return guard
     data = mc_request(f"/ecommerce/stores/{store_id}/customers/{customer_id}", method="DELETE", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7114,6 +7398,8 @@ def get_store_order(store_id: str, order_id: str, account: str | None = None) ->
         JSON with the full order object (id, customer, currency_code, order_total, lines, financial_status, processed_at_foreign, and related fields).
     """
     data = mc_request(f"/ecommerce/stores/{store_id}/orders/{order_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7144,6 +7430,8 @@ def create_store_order(store_id: str, order_id: str, customer: dict, lines: list
     if additional_fields:
         body.update(additional_fields)
     data = mc_request(f"/ecommerce/stores/{store_id}/orders", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7172,6 +7460,8 @@ def update_store_order(store_id: str, order_id: str, additional_fields: Optional
     if additional_fields:
         body.update(additional_fields)
     data = mc_request(f"/ecommerce/stores/{store_id}/orders/{order_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7195,6 +7485,8 @@ def delete_store_order(store_id: str, order_id: str, account: str | None = None)
     if (guard := _guard_write(action="delete order", store_id=store_id, order_id=order_id, account=account)):
         return guard
     data = mc_request(f"/ecommerce/stores/{store_id}/orders/{order_id}", method="DELETE", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7244,6 +7536,8 @@ def get_store_order_line(store_id: str, order_id: str, line_id: str, account: st
         JSON with the line object (id, product_id, product_variant_id, quantity, price, discount).
     """
     data = mc_request(f"/ecommerce/stores/{store_id}/orders/{order_id}/lines/{line_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7278,6 +7572,8 @@ def create_store_order_line(store_id: str, order_id: str, line_id: str, product_
     if additional_fields:
         body.update(additional_fields)
     data = mc_request(f"/ecommerce/stores/{store_id}/orders/{order_id}/lines", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7307,6 +7603,8 @@ def update_store_order_line(store_id: str, order_id: str, line_id: str, addition
     if additional_fields:
         body.update(additional_fields)
     data = mc_request(f"/ecommerce/stores/{store_id}/orders/{order_id}/lines/{line_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7332,6 +7630,8 @@ def delete_store_order_line(store_id: str, order_id: str, line_id: str, account:
     if (guard := _guard_write(action="delete order line", store_id=store_id, order_id=order_id, line_id=line_id, account=account)):
         return guard
     data = mc_request(f"/ecommerce/stores/{store_id}/orders/{order_id}/lines/{line_id}", method="DELETE", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7381,6 +7681,8 @@ def get_store_product_image(store_id: str, product_id: str, image_id: str, accou
         JSON with the image object (id, url, variant_ids).
     """
     data = mc_request(f"/ecommerce/stores/{store_id}/products/{product_id}/images/{image_id}", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7411,6 +7713,8 @@ def create_store_product_image(store_id: str, product_id: str, image_id: str, ur
     if additional_fields:
         body.update(additional_fields)
     data = mc_request(f"/ecommerce/stores/{store_id}/products/{product_id}/images", body=body, method="POST", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7440,6 +7744,8 @@ def update_store_product_image(store_id: str, product_id: str, image_id: str, ad
     if additional_fields:
         body.update(additional_fields)
     data = mc_request(f"/ecommerce/stores/{store_id}/products/{product_id}/images/{image_id}", body=body, method="PATCH", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 
@@ -7465,6 +7771,8 @@ def delete_store_product_image(store_id: str, product_id: str, image_id: str, ac
     if (guard := _guard_write(action="delete product image", store_id=store_id, product_id=product_id, image_id=image_id, account=account)):
         return guard
     data = mc_request(f"/ecommerce/stores/{store_id}/products/{product_id}/images/{image_id}", method="DELETE", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
     return json.dumps(data, indent=2)
 
 

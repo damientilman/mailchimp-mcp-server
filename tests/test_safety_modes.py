@@ -33,7 +33,7 @@ class TestReadOnlyMode:
 
     def test_read_tool_not_blocked(self, monkeypatch: pytest.MonkeyPatch, mock_mc_request) -> None:
         monkeypatch.setattr(server, "READ_ONLY", True)
-        calls = mock_mc_request({"health_check": "Everything's Chimpy!"})
+        calls = mock_mc_request({"health_status": "Everything's Chimpy!"})
 
         result = server.ping()
         payload = json.loads(result)
