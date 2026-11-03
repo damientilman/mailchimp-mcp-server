@@ -8,7 +8,7 @@
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io)
 [![Docker](https://img.shields.io/badge/ghcr.io-mailchimp--mcp--server-blue?logo=docker)](https://github.com/damientilman/mailchimp-mcp-server/pkgs/container/mailchimp-mcp-server)
 
-The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/): **227 tools** to query and manage your Mailchimp account from any MCP-compatible client. It covers the full campaign, audience, member, segment, automation and reporting surface, complete e-commerce (read and write), landing pages, File Manager, surveys, signup forms and verified domains, plus multi-account support and runtime-security guardrails (read-only, dry-run and audit modes, with per-tool risk metadata).
+The most complete [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/): **259 tools** to query and manage your Mailchimp account from any MCP-compatible client. It covers the full campaign, audience, member, segment, automation and reporting surface, complete e-commerce (read and write), landing pages, File Manager, surveys, signup forms and verified domains, plus multi-account support and runtime-security guardrails (read-only, dry-run and audit modes, with per-tool risk metadata).
 
 Uses the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api/) via [`requests`](https://pypi.org/project/requests/). Not based on the official [mailchimp-marketing-python](https://github.com/mailchimp/mailchimp-marketing-python) client. I hit too many issues with it so I went with raw HTTP calls instead.
 
@@ -185,7 +185,7 @@ The server is designed for defense-in-depth alongside an external MCP gateway: i
 
 ### Tool profiles
 
-Exposing all 227 tools sends a large tool list to the model on every turn (~63k tokens). If you only need part of the surface, load a subset with one line:
+Exposing all 259 tools sends a large tool list to the model on every turn (~63k tokens). If you only need part of the surface, load a subset with one line:
 
 ```json
 "env": { "MAILCHIMP_API_KEY": "your-key-us8", "MAILCHIMP_TOOLS": "read" }

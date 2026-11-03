@@ -686,6 +686,7 @@ def get_campaign_click_details(campaign_id: str, count: int = 20, account: str |
     links = []
     for url_report in data.get("urls_clicked", []):
         links.append({
+            "id": url_report.get("id"),
             "url": url_report.get("url"),
             "total_clicks": url_report.get("total_clicks"),
             "unique_clicks": url_report.get("unique_clicks"),
@@ -7800,6 +7801,720 @@ def list_account_orders(count: int = 10, offset: int = 0, account: str | None = 
     return json.dumps(data, indent=2)
 
 
+# --- Tools: API coverage additions (reports, interests, folders, cart lines, surveys, sites) ---
+
+
+@mcp.tool()
+def list_campaign_reports(count: int = 20, offset: int = 0, campaign_type: Optional[str] = None, before_send_time: Optional[str] = None, since_send_time: Optional[str] = None, account: str | None = None) -> str:
+    """List performance reports for all sent campaigns in one call.
+
+    Use for bulk comparison across campaigns. Use get_campaign_report for the full report of a single campaign.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        count: Number of records to return (1-1000, default 20).
+        offset: Number of records to skip for pagination. Default 0.
+        campaign_type: Filter by campaign type: regular, plaintext, absplit, rss, variate.
+        before_send_time: Only reports for campaigns sent before this ISO 8601 time.
+        since_send_time: Only reports for campaigns sent after this ISO 8601 time.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with reports array and total_items.
+    """
+    params = {k: v for k, v in {"count": count, "offset": offset, "type": campaign_type, "before_send_time": before_send_time, "since_send_time": since_send_time}.items() if v is not None}
+    data = mc_request("/reports", params=params, account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def get_link_click_details(campaign_id: str, link_id: str, account: str | None = None) -> str:
+    """Retrieve click statistics for one tracked link of a campaign.
+
+    Use get_campaign_click_details first to list the links and their IDs.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        link_id: Tracked link ID from get_campaign_click_details.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the link's url, total_clicks, unique_clicks and click_percentage.
+    """
+    data = mc_request(f"/reports/{campaign_id}/click-details/{link_id}", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def list_link_clickers(campaign_id: str, link_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
+    """List the members who clicked a given link in a campaign.
+
+    Use to find who engaged with a specific link. Needs the link_id from get_campaign_click_details.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        link_id: Tracked link ID from get_campaign_click_details.
+        count: Number of records to return (1-1000, default 20).
+        offset: Number of records to skip for pagination. Default 0.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with members array (email_address, clicks) and total_items.
+    """
+    data = mc_request(f"/reports/{campaign_id}/click-details/{link_id}/members", params={"count": count, "offset": offset}, account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def get_link_clicker(campaign_id: str, link_id: str, email_address: str, account: str | None = None) -> str:
+    """Retrieve one member's click count on a given link of a campaign.
+
+    Use after list_link_clickers to check a single recipient.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        link_id: Tracked link ID from get_campaign_click_details.
+        email_address: Email address of the member.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the member's email_address and clicks.
+    """
+    hash_email_address = _subscriber_hash(email_address)
+    if hash_email_address is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
+    data = mc_request(f"/reports/{campaign_id}/click-details/{link_id}/members/{hash_email_address}", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def get_member_open_details(campaign_id: str, email_address: str, account: str | None = None) -> str:
+    """Retrieve one member's open history for a campaign.
+
+    Use for a single recipient. Use get_open_details for the campaign-wide list of openers.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        email_address: Email address of the member.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the member's opens (count and timestamps).
+    """
+    hash_email_address = _subscriber_hash(email_address)
+    if hash_email_address is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
+    data = mc_request(f"/reports/{campaign_id}/open-details/{hash_email_address}", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def get_member_email_activity(campaign_id: str, email_address: str, account: str | None = None) -> str:
+    """Retrieve one member's activity (opens, clicks, bounces) on a campaign.
+
+    Use for a single recipient. Use get_email_activity for the activity of all recipients.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        email_address: Email address of the member.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the member's activity array.
+    """
+    hash_email_address = _subscriber_hash(email_address)
+    if hash_email_address is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
+    data = mc_request(f"/reports/{campaign_id}/email-activity/{hash_email_address}", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def get_member_sent_to_status(campaign_id: str, email_address: str, account: str | None = None) -> str:
+    """Retrieve the delivery status of a campaign for one member.
+
+    Use to confirm whether a given address was sent the campaign and whether it was delivered.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        email_address: Email address of the member.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with status and send details for the member.
+    """
+    hash_email_address = _subscriber_hash(email_address)
+    if hash_email_address is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
+    data = mc_request(f"/reports/{campaign_id}/sent-to/{hash_email_address}", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def get_member_unsubscribe_record(campaign_id: str, email_address: str, account: str | None = None) -> str:
+    """Retrieve a member's unsubscribe record for a campaign.
+
+    Returns an error if the member did not unsubscribe from this campaign.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        campaign_id: The Mailchimp campaign ID (e.g. 'abc123def4'). Must be a sent campaign.
+        email_address: Email address of the member.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the unsubscribe timestamp and reason.
+    """
+    hash_email_address = _subscriber_hash(email_address)
+    if hash_email_address is None:
+        return json.dumps({"error": f"Invalid email address: {email_address!r}"}, indent=2)
+    data = mc_request(f"/reports/{campaign_id}/unsubscribed/{hash_email_address}", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def get_audience_growth_for_month(list_id: str, month: str, account: str | None = None) -> str:
+    """Retrieve an audience's growth numbers for one month.
+
+    Use get_audience_growth_history for a multi-month series.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        month: Month in YYYY-MM format (e.g. '2026-04').
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with subscribed, unsubscribed, cleaned, pending, transactional and imports counts for the month.
+    """
+    data = mc_request(f"/lists/{list_id}/growth-history/{month}", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def search_tags(list_id: str, name: str, account: str | None = None) -> str:
+    """Search an audience's tags by name.
+
+    Use to find a tag ID or check which tags exist before tagging or segmenting.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        name: Tag name or partial name to search for.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with tags array (id, name) and total_items.
+    """
+    data = mc_request(f"/lists/{list_id}/tag-search", params={"name": name}, account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def get_interest_category(list_id: str, category_id: str, account: str | None = None) -> str:
+    """Retrieve a single interest category (group) of an audience.
+
+    Use list_interest_categories to discover category IDs.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        category_id: Interest category ID. Obtain from list_interest_categories.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the category's id, title, type and display_order.
+    """
+    data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def get_interest(list_id: str, category_id: str, interest_id: str, account: str | None = None) -> str:
+    """Retrieve a single interest (group option) of an interest category.
+
+    Use list_interests to discover interest IDs.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        category_id: Interest category ID. Obtain from list_interest_categories.
+        interest_id: Interest ID. Obtain from list_interests.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the interest's id, name, subscriber_count and display_order.
+    """
+    data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests/{interest_id}", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def update_interest_category(list_id: str, category_id: str, title: Optional[str] = None, type: Optional[str] = None, display_order: Optional[int] = None, account: str | None = None) -> str:
+    """Update an interest category's title, display type or order.
+
+    Only the fields you pass are changed.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        category_id: Interest category ID. Obtain from list_interest_categories.
+        title: New title shown to subscribers.
+        type: Display type: checkboxes, dropdown, radio, hidden.
+        display_order: Position of the category on the signup form.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the updated category.
+    """
+    if (guard := _guard_write(action="update interest category", list_id=list_id, category_id=category_id, title=title, account=account)):
+        return guard
+    body = {"title": title, "type": type, "display_order": display_order}
+    body = {k: v for k, v in body.items() if v is not None}
+    if not body:
+        return json.dumps({"error": "Nothing to update: pass at least one field."}, indent=2)
+    data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}", body=body, method="PATCH", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def update_interest(list_id: str, category_id: str, interest_id: str, name: Optional[str] = None, display_order: Optional[int] = None, account: str | None = None) -> str:
+    """Update an interest's name or order within a category.
+
+    Only the fields you pass are changed.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        category_id: Interest category ID. Obtain from list_interest_categories.
+        interest_id: Interest ID. Obtain from list_interests.
+        name: New interest name.
+        display_order: Position of the interest within the category.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the updated interest.
+    """
+    if (guard := _guard_write(action="update interest", list_id=list_id, category_id=category_id, interest_id=interest_id, account=account)):
+        return guard
+    body = {"name": name, "display_order": display_order}
+    body = {k: v for k, v in body.items() if v is not None}
+    if not body:
+        return json.dumps({"error": "Nothing to update: pass at least one field."}, indent=2)
+    data = mc_request(f"/lists/{list_id}/interest-categories/{category_id}/interests/{interest_id}", body=body, method="PATCH", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def get_automation(workflow_id: str, account: str | None = None) -> str:
+    """Retrieve a single classic automation workflow with its settings and status.
+
+    Use list_automations to discover workflow IDs and get_automation_emails for the emails inside it.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        workflow_id: The unique id of the classic automation workflow. Obtain from list_automations.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the workflow's id, status, trigger settings, recipients and report summary.
+    """
+    data = mc_request(f"/automations/{workflow_id}", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def archive_automation(workflow_id: str, account: str | None = None) -> str:
+    """Archive a classic automation permanently. Cannot be undone.
+
+    Archiving stops the workflow for good and it cannot be restarted. Use pause_automation to stop it temporarily.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        workflow_id: The unique id of the classic automation workflow. Obtain from list_automations.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON confirming the archive action.
+    """
+    if (guard := _guard_write(action="archive automation", workflow_id=workflow_id, account=account)):
+        return guard
+    data = mc_request(f"/automations/{workflow_id}/actions/archive", method="POST", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def get_landing_page_content(page_id: str, account: str | None = None) -> str:
+    """Retrieve the HTML content of a landing page.
+
+    Use get_landing_page for settings and status.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        page_id: Landing page ID. Obtain from list_landing_pages.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the page's HTML content.
+    """
+    data = mc_request(f"/landing-pages/{page_id}/content", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def get_file_folder(folder_id: str, account: str | None = None) -> str:
+    """Retrieve a single File Manager folder.
+
+    Use list_file_folders to discover folder IDs.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        folder_id: File Manager folder ID. Obtain from list_file_folders.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the folder's id, name, file_count and created_at.
+    """
+    data = mc_request(f"/file-manager/folders/{folder_id}", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def list_file_folder_files(folder_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
+    """List the files stored in a File Manager folder.
+
+    Use list_files for files across all folders.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        folder_id: File Manager folder ID. Obtain from list_file_folders.
+        count: Number of records to return (1-1000, default 20).
+        offset: Number of records to skip for pagination. Default 0.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with files array and total_items.
+    """
+    data = mc_request(f"/file-manager/folders/{folder_id}/files", params={"count": count, "offset": offset}, account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def create_file_folder(name: str, account: str | None = None) -> str:
+    """Create a File Manager folder.
+
+    Folder names do not need to be unique.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        name: Name of the new folder.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the created folder.
+    """
+    if (guard := _guard_write(action="create file folder", name=name, account=account)):
+        return guard
+    data = mc_request("/file-manager/folders", body={"name": name}, method="POST", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def update_file_folder(folder_id: str, name: str, account: str | None = None) -> str:
+    """Rename a File Manager folder.
+
+    Files inside the folder are not affected.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        folder_id: File Manager folder ID. Obtain from list_file_folders.
+        name: New folder name.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the updated folder.
+    """
+    if (guard := _guard_write(action="update file folder", folder_id=folder_id, name=name, account=account)):
+        return guard
+    data = mc_request(f"/file-manager/folders/{folder_id}", body={"name": name}, method="PATCH", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def delete_file_folder(folder_id: str, account: str | None = None) -> str:
+    """Permanently delete a File Manager folder.
+
+    Irreversible. Use list_file_folder_files first to check what the folder holds.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        folder_id: File Manager folder ID. Obtain from list_file_folders.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON confirming deletion (status deleted, folder_id) or an error object.
+    """
+    if (guard := _guard_write(action="delete file folder", folder_id=folder_id, account=account)):
+        return guard
+    data = mc_request(f"/file-manager/folders/{folder_id}", method="DELETE", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({"status": "deleted", "folder_id": folder_id}, indent=2)
+
+
+@mcp.tool()
+def list_store_cart_lines(store_id: str, cart_id: str, count: int = 20, offset: int = 0, account: str | None = None) -> str:
+    """List the line items of an e-commerce cart.
+
+    Use list_store_carts to discover cart IDs.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        store_id: E-commerce store ID. Obtain from list_ecommerce_stores.
+        cart_id: Cart ID. Obtain from list_store_carts.
+        count: Number of records to return (1-1000, default 20).
+        offset: Number of records to skip for pagination. Default 0.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with lines array and total_items.
+    """
+    data = mc_request(f"/ecommerce/stores/{store_id}/carts/{cart_id}/lines", params={"count": count, "offset": offset}, account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def get_store_cart_line(store_id: str, cart_id: str, line_id: str, account: str | None = None) -> str:
+    """Retrieve one line item of an e-commerce cart.
+
+    Use list_store_cart_lines to discover line IDs.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        store_id: E-commerce store ID. Obtain from list_ecommerce_stores.
+        cart_id: Cart ID. Obtain from list_store_carts.
+        line_id: Cart line ID.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the line object.
+    """
+    data = mc_request(f"/ecommerce/stores/{store_id}/carts/{cart_id}/lines/{line_id}", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def create_store_cart_line(store_id: str, cart_id: str, line_id: str, product_id: str, product_variant_id: str, quantity: int, price: float, account: str | None = None) -> str:
+    """Add a line item to an e-commerce cart.
+
+    line_id is client-supplied and must be unique within the cart.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        store_id: E-commerce store ID. Obtain from list_ecommerce_stores.
+        cart_id: Cart ID. Obtain from list_store_carts.
+        line_id: Unique line ID within the cart.
+        product_id: Product ID of the item.
+        product_variant_id: Variant ID of the item.
+        quantity: Quantity in the cart.
+        price: Unit price.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the created line.
+    """
+    if (guard := _guard_write(action="create store cart line", store_id=store_id, cart_id=cart_id, line_id=line_id, account=account)):
+        return guard
+    data = mc_request(f"/ecommerce/stores/{store_id}/carts/{cart_id}/lines", body={"id": line_id, "product_id": product_id, "product_variant_id": product_variant_id, "quantity": quantity, "price": price}, method="POST", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def update_store_cart_line(store_id: str, cart_id: str, line_id: str, additional_fields: Optional[dict] = None, account: str | None = None) -> str:
+    """Update a line item of an e-commerce cart.
+
+    Only the fields passed in additional_fields are changed.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        store_id: E-commerce store ID. Obtain from list_ecommerce_stores.
+        cart_id: Cart ID. Obtain from list_store_carts.
+        line_id: Existing cart line ID.
+        additional_fields: Line fields to update, e.g. quantity, price, product_id, product_variant_id.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the updated line.
+    """
+    if (guard := _guard_write(action="update store cart line", store_id=store_id, cart_id=cart_id, line_id=line_id, account=account)):
+        return guard
+    data = mc_request(f"/ecommerce/stores/{store_id}/carts/{cart_id}/lines/{line_id}", body=dict(additional_fields or {}), method="PATCH", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def delete_store_cart_line(store_id: str, cart_id: str, line_id: str, account: str | None = None) -> str:
+    """Permanently delete a line item from an e-commerce cart.
+
+    Irreversible.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        store_id: E-commerce store ID. Obtain from list_ecommerce_stores.
+        cart_id: Cart ID. Obtain from list_store_carts.
+        line_id: Cart line ID to delete.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON confirming deletion (status deleted, line_id) or an error object.
+    """
+    if (guard := _guard_write(action="delete store cart line", store_id=store_id, cart_id=cart_id, line_id=line_id, account=account)):
+        return guard
+    data = mc_request(f"/ecommerce/stores/{store_id}/carts/{cart_id}/lines/{line_id}", method="DELETE", account=account)
+    if "error" in data:
+        return json.dumps(data, indent=2)
+    return json.dumps({"status": "deleted", "line_id": line_id}, indent=2)
+
+
+@mcp.tool()
+def create_campaign_from_survey(list_id: str, survey_id: str, account: str | None = None) -> str:
+    """Create an email campaign from a survey.
+
+    The campaign is created as a draft. Review it with get_campaign_details before sending.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        survey_id: Survey ID. Obtain from list_surveys.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON confirming the action.
+    """
+    if (guard := _guard_write(action="create campaign from survey", list_id=list_id, survey_id=survey_id, account=account)):
+        return guard
+    data = mc_request(f"/lists/{list_id}/surveys/{survey_id}/actions/create-email", method="POST", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def replicate_survey(list_id: str, survey_id: str, account: str | None = None) -> str:
+    """Create a copy of a survey.
+
+    The copy is created unpublished.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        list_id: Audience/list ID (10-char alphanumeric, e.g. 'abc123def4'). Obtain from list_audiences.
+        survey_id: Survey ID. Obtain from list_surveys.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with the new survey or a confirmation.
+    """
+    if (guard := _guard_write(action="replicate survey", list_id=list_id, survey_id=survey_id, account=account)):
+        return guard
+    data = mc_request(f"/lists/{list_id}/surveys/{survey_id}/actions/replicate", method="POST", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def enable_site_pixel(connected_site_id: str, account: str | None = None) -> str:
+    """Enable the tracking pixel of a connected site.
+
+    Use disable_site_pixel to turn it off again.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        connected_site_id: Connected site ID. Obtain from list_connected_sites.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON confirming the action.
+    """
+    if (guard := _guard_write(action="enable site pixel", connected_site_id=connected_site_id, account=account)):
+        return guard
+    data = mc_request(f"/connected-sites/{connected_site_id}/actions/enable-pixel", method="POST", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def disable_site_pixel(connected_site_id: str, account: str | None = None) -> str:
+    """Disable the tracking pixel of a connected site.
+
+    Use enable_site_pixel to turn it on again.
+
+    Authenticated via API key. Max 10 concurrent requests. Respects read-only and dry-run modes.
+
+    Args:
+        connected_site_id: Connected site ID. Obtain from list_connected_sites.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON confirming the action.
+    """
+    if (guard := _guard_write(action="disable site pixel", connected_site_id=connected_site_id, account=account)):
+        return guard
+    data = mc_request(f"/connected-sites/{connected_site_id}/actions/disable-pixel", method="POST", account=account)
+    return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+def list_sms_campaigns(count: int = 20, offset: int = 0, account: str | None = None) -> str:
+    """List SMS campaigns with their status and metadata.
+
+    Read-only. Sending SMS campaigns is not exposed by this server.
+
+    Authenticated via API key. Max 10 concurrent requests. Read-only, safe to retry.
+
+    Args:
+        count: Number of records to return (1-1000, default 20).
+        offset: Number of records to skip for pagination. Default 0.
+        account: Optional account name (e.g. 'marketing') configured via MAILCHIMP_API_KEY_<NAME>. Omit to use the default account. See list_accounts.
+
+    Returns:
+        JSON with campaigns array and total_items.
+    """
+    data = mc_request("/sms-campaigns", params={"count": count, "offset": offset}, account=account)
+    return json.dumps(data, indent=2)
+
+
 # --- Runtime security guardrails ---
 # Irreversible real sends. Combined with the delete_* prefix, these define the 'destructive'
 # risk tier: irreversible data loss or an irreversible outbound send with wide blast radius.
@@ -7809,6 +8524,9 @@ _DESTRUCTIVE_SEND = frozenset({"send_campaign", "resend_to_non_openers"})
 # arbitrary operations, including DELETEs, in one call, so a gateway must treat it as destructive
 # rather than wave it through as a plain write.
 _DESTRUCTIVE_BATCH = frozenset({"create_batch"})
+
+# Irreversible state changes that are not deletions: an archived automation can never be restarted.
+_DESTRUCTIVE_ARCHIVE = frozenset({"archive_automation"})
 
 # Writes that are safe to repeat but whose names carry no delete_/upsert_ prefix, so the derived
 # rule below cannot infer them. Kept explicit (like _DESTRUCTIVE_SEND) so the idempotent hint
@@ -7826,7 +8544,7 @@ def _classify_risk(name: str, fn) -> str:
     Read = everything else. The write/read split is derived, not hand-maintained, so it
     cannot drift; only the destructive set needs human judgement.
     """
-    if name.startswith("delete_") or name in _DESTRUCTIVE_SEND or name in _DESTRUCTIVE_BATCH:
+    if name.startswith("delete_") or name in _DESTRUCTIVE_SEND or name in _DESTRUCTIVE_BATCH or name in _DESTRUCTIVE_ARCHIVE:
         return "destructive"
     if "_guard_write" in fn.__code__.co_names:
         return "write"

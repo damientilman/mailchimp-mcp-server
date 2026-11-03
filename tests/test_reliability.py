@@ -194,7 +194,7 @@ class TestResponseVolumeBounds:
 class TestAdvertisedToolCount:
     # The number below is advertised in README.md and glama.json. Bump all three together when
     # adding or removing tools; this test fails on drift so the marketing count can't go stale.
-    ADVERTISED = 227
+    ADVERTISED = 259
 
     def test_tool_count_matches_advertised(self) -> None:
         assert len(server.TOOL_RISK) == self.ADVERTISED
