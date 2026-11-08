@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Read and write tools no longer turn an error response into an empty or null payload (an invalid
   key used to look like an audience with no members). The API error is returned as-is.
 - `get_campaign_click_details` now includes each link's `id`, which the new per-link tools need.
+- **Server failed to start against `mcp` 2.x.** `mcp` 2.0 restructured the package: the
+  high-level server class moved from `mcp.server.fastmcp.FastMCP` to
+  `mcp.server.mcpserver.MCPServer`, so `server.py`'s `from mcp.server.fastmcp import FastMCP`
+  died at import with `ModuleNotFoundError`. Because the dependency was declared with no upper
+  bound, resolvers picked 2.0 and existing installs broke with no local change — and under an
+  MCP client it surfaced only as a server that silently never connected, easily mistaken for
+  bad credentials. `server.py` now imports `MCPServer` from the 2.x path with a fallback to the
+  1.x `FastMCP`, so it runs on both; the dependency is bounded `mcp[cli]>=1.0.0,<3`.
 
 ### Added
 32 tools covering endpoints that were missing from the Marketing API v3 surface (259 tools in total):
@@ -38,6 +46,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 All writes go through the read-only and dry-run guards. Methods and paths were checked against the
 official Swagger schema (3.0.91). The Audiences beta and the top-level segment snapshot endpoints
 are not covered yet, as Mailchimp still marks them unstable.
+
+### Changed
+- Migrated to the `mcp` 2.x high-level server API (`MCPServer`) while keeping 1.x support. The
+  internal tool registry, risk annotations, and tool-profile filtering are unchanged; the
+  `ToolAnnotations` risk hints (`readOnlyHint` / `destructiveHint` / `idempotentHint`) still ship
+  over `tools/list` on both versions, verified against `mcp` 1.29 and 2.0.
 
 ## [1.2.0] - 2026-07-11
 

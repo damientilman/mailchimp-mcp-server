@@ -37,12 +37,20 @@ class TestRiskMetadata:
 
     def test_mcp_annotations_expose_risk(self) -> None:
         tm = server.mcp._tool_manager
-        assert tm.get_tool("delete_store").annotations.destructiveHint is True
-        assert tm.get_tool("delete_store").annotations.idempotentHint is True
-        assert tm.get_tool("list_audiences").annotations.readOnlyHint is True
-        assert tm.get_tool("list_audiences").annotations.destructiveHint is False
-        assert tm.get_tool("create_campaign").annotations.readOnlyHint is False
-        assert tm.get_tool("create_campaign").annotations.destructiveHint is False
+
+        def hints(name: str) -> dict:
+            # Dump by alias so we assert on the MCP wire contract (readOnlyHint / destructiveHint /
+            # idempotentHint). mcp 2.0 renamed the model fields to snake_case, keeping the camelCase
+            # names only as serialization aliases, so attribute access no longer works across
+            # versions but the wire representation stays stable.
+            return tm.get_tool(name).annotations.model_dump(by_alias=True)
+
+        assert hints("delete_store")["destructiveHint"] is True
+        assert hints("delete_store")["idempotentHint"] is True
+        assert hints("list_audiences")["readOnlyHint"] is True
+        assert hints("list_audiences")["destructiveHint"] is False
+        assert hints("create_campaign")["readOnlyHint"] is False
+        assert hints("create_campaign")["destructiveHint"] is False
 
 
 class TestArgumentValidation:
