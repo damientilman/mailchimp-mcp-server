@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-03
+
 ### Fixed
+- `ping` read the `health_check` field, which Mailchimp now returns as `health_status`, so it
+  reported `status_code: 0` on a healthy connection. It accepts both names and returns the API
+  error object when the call fails.
+- `get_account_info` returned an object full of `null` when the API call failed. It now returns
+  the error.
+- Read and write tools no longer turn an error response into an empty or null payload (an invalid
+  key used to look like an audience with no members). The API error is returned as-is.
+- `get_campaign_click_details` now includes each link's `id`, which the new per-link tools need.
 - **Server failed to start against `mcp` 2.x.** `mcp` 2.0 restructured the package: the
   high-level server class moved from `mcp.server.fastmcp.FastMCP` to
   `mcp.server.mcpserver.MCPServer`, so `server.py`'s `from mcp.server.fastmcp import FastMCP`
@@ -16,6 +26,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MCP client it surfaced only as a server that silently never connected, easily mistaken for
   bad credentials. `server.py` now imports `MCPServer` from the 2.x path with a fallback to the
   1.x `FastMCP`, so it runs on both; the dependency is bounded `mcp[cli]>=1.0.0,<3`.
+
+### Added
+32 tools covering endpoints that were missing from the Marketing API v3 surface (259 tools in total):
+- Reports: `list_campaign_reports`, `get_link_click_details`, `list_link_clickers`,
+  `get_link_clicker`, `get_member_open_details`, `get_member_email_activity`,
+  `get_member_sent_to_status`, `get_member_unsubscribe_record`.
+- Audiences: `get_audience_growth_for_month`, `search_tags`, `get_interest_category`,
+  `get_interest`, `update_interest_category`, `update_interest`.
+- Automations and landing pages: `get_automation`, `archive_automation` (destructive tier),
+  `get_landing_page_content`.
+- File Manager folders: `get_file_folder`, `list_file_folder_files`, `create_file_folder`,
+  `update_file_folder`, `delete_file_folder`.
+- E-commerce cart lines: `list_store_cart_lines`, `get_store_cart_line`, `create_store_cart_line`,
+  `update_store_cart_line`, `delete_store_cart_line`.
+- Surveys, connected sites, SMS: `create_campaign_from_survey`, `replicate_survey`,
+  `enable_site_pixel`, `disable_site_pixel`, `list_sms_campaigns`.
+
+All writes go through the read-only and dry-run guards. Methods and paths were checked against the
+official Swagger schema (3.0.91). The Audiences beta and the top-level segment snapshot endpoints
+are not covered yet, as Mailchimp still marks them unstable.
 
 ### Changed
 - Migrated to the `mcp` 2.x high-level server API (`MCPServer`) while keeping 1.x support. The
